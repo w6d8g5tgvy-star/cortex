@@ -39,6 +39,7 @@ Usage:
   cortex config           Print copy-paste MCP configs for popular AI tools
   cortex hooks install    Stream Claude Code activity to Cortex's Live view (and phone)
   cortex hooks uninstall  Remove the Claude Code hooks
+  cortex setup            Connect Cortex to all your AI apps, enable phone access, start at login
   cortex update           Check for an update and install it
   cortex help             Show this help
 
@@ -55,7 +56,7 @@ function supervise() {
   let first = true;
   let child = null;
   const run = () => {
-    const childArgs = [__filename, 'serve', ...args.filter((a) => a !== 'start' && (first || a !== '--open'))];
+    const childArgs = [__filename, 'serve', ...args.filter((a) => a !== 'start' && (first || (a !== '--open' && a !== '--open-settings')))];
     first = false;
     const started = Date.now();
     child = spawn(process.execPath, childArgs, { stdio: 'inherit', env: { ...process.env, CORTEX_SUPERVISED: '1' } });
@@ -94,6 +95,7 @@ async function serve() {
     throw e;
   }
   const url = `http://127.0.0.1:${port}`;
+  const openUrl = has('open-settings') ? url + '/#/settings' : url;
   const remote = host !== '127.0.0.1' && host !== 'localhost' && host !== '::1';
   console.log(`
   ◆ Cortex ${require('../package.json').version} is running
@@ -104,7 +106,7 @@ async function serve() {
 ${remote ? `    Phone      ${lanAddresses(port).map((a) => a.url).join('  ') || '(no network found)'}  (pair from Settings → Phone access)\n` : ''}
   Press Ctrl+C to stop. Run "cortex config" for agent setup snippets.
 `);
-  if (has('open')) openBrowser(url);
+  if (has('open') || has('open-settings')) openBrowser(openUrl);
 }
 
 async function main() {
@@ -142,6 +144,15 @@ async function main() {
       ch.uninstall();
       console.log('✓ Cortex hooks removed from Claude Code settings.');
     } else console.log(ch.status());
+    return;
+  }
+
+  if (cmd === 'setup') {
+    const results = require('../src/setup').run(vault, { phone: !has('no-phone'), screen: !has('no-screen'), autostart: !has('no-autostart') });
+    const icon = { ok: '✓', skip: '–', fail: '✗' };
+    console.log('\n  ◆ Cortex setup\n');
+    for (const r of results) console.log(`  ${icon[r.status]} ${r.name.padEnd(16)} ${r.msg}`);
+    console.log(`\n  Vault: ${vault}\n  Every file changed was backed up as <file>.cortex-backup.\n  Restart your AI apps so they pick up Cortex.\n  Next: open Settings → Phone access in the dashboard and scan the QR code with your phone.\n`);
     return;
   }
 

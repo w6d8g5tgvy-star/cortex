@@ -14,7 +14,23 @@ Cortex runs on your own computer. It gives you a dashboard in your browser with 
 
 ---
 
-## 1. Install
+## Quick setup (recommended)
+
+1. Install **Node.js 18+** from <https://nodejs.org>.
+2. Unzip this folder somewhere permanent, then double-click **`Setup Cortex.bat`** (Windows) or **`Setup Cortex.command`** (Mac). On Linux, run `./setup-cortex.sh`.
+3. Setup then:
+   - connects Cortex to Claude Code, Claude Desktop, Cursor, Windsurf and Codex (whichever you have installed);
+   - installs the Claude Code live-view hooks;
+   - turns on phone access, screen sharing and automatic updates;
+   - makes Cortex start when you log in.
+
+   Every file it changes is backed up as `<file>.cortex-backup`.
+4. The dashboard opens on Settings. Scan the QR code with your phone, then tap Share → **Add to Home Screen**.
+5. Restart your AI apps so they pick up Cortex.
+
+To skip a part, run setup from a terminal with `--no-screen`, `--no-phone` or `--no-autostart`, for example `node bin/cortex.js setup --no-screen`.
+
+## 1. Install (manual)
 
 1. Install **Node.js 18+** from <https://nodejs.org> (the LTS version is fine).
 2. Unzip the `cortex` folder somewhere permanent, for example `Documents/cortex`.

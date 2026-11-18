@@ -13,7 +13,7 @@ const { execFile } = require('child_process');
 
 const APP = path.resolve(__dirname, '..');
 const UPD = path.join(APP, '.update');
-const MANAGED = ['bin', 'src', 'public', 'test', 'integrations', 'scripts', 'package.json', 'README.md', 'LICENSE', 'Start Cortex.bat', 'Start Cortex.command', 'start-cortex.sh'];
+const MANAGED = ['bin', 'src', 'public', 'test', 'integrations', 'scripts', 'package.json', 'README.md', 'LICENSE', 'Start Cortex.bat', 'Start Cortex.command', 'start-cortex.sh', 'Setup Cortex.bat', 'Setup Cortex.command', 'setup-cortex.sh'];
 const currentVersion = () => JSON.parse(fs.readFileSync(path.join(APP, 'package.json'), 'utf8')).version;
 
 function cmpVer(a, b) {

@@ -8,7 +8,7 @@
   },
   "main": "src/store.js",
   "cortex": {
-    "updateSource": ""
+    "updateSource": "w6d8g5tgvy-star/cortex"
   },
   "scripts": {
     "start": "node bin/cortex.js start --open",
