@@ -1,6 +1,6 @@
 {
   "name": "cortex-os",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Local AI project manager and memory vault (Obsidian-compatible Markdown) with a built-in MCP server for AI agents.",
   "license": "MIT",
   "bin": {
@@ -27,5 +27,13 @@
     "public",
     "README.md"
   ],
-  "keywords": ["mcp", "ai-agents", "memory", "project-management", "obsidian", "knowledge-base", "dashboard"]
+  "keywords": [
+    "mcp",
+    "ai-agents",
+    "memory",
+    "project-management",
+    "obsidian",
+    "knowledge-base",
+    "dashboard"
+  ]
 }

@@ -467,6 +467,7 @@ function startServer({ store, port, host, token: cliToken }) {
         remote: { enabled: s.remote.enabled, listening: host, ...(local ? { token: tokenNow(), addresses: [...lanAddresses(port), ...(tunnel.url ? [{ ip: new URL(tunnel.url).host, kind: 'public', url: tunnel.url }] : [])] } : {}) },
         supervised: !!process.env.CORTEX_SUPERVISED,
         claudeHooks: local ? claudeHooks.status() : undefined,
+        instructions: local ? require('./instructions').status() : undefined,
         agents: { enabled: s.agents.enabled, folders: s.agents.folders, permission: s.agents.permission, maxMinutes: s.agents.maxMinutes, instructions: s.agents.instructions || '', saveGate: s.agents.saveGate !== false, phoneApprovals: !!s.agents.phoneApprovals },
         connector: local ? { token: s.connector.token, tunnel: tunnel.status(), cloudflared: await tunnel.available(), localUrl: `http://127.0.0.1:${port}/mcp/${s.connector.token}` } : undefined,
       });
@@ -511,6 +512,14 @@ function startServer({ store, port, host, token: cliToken }) {
     if (p === '/api/update/check' && m === 'POST') { if (!localOnly()) return; return send(res, 200, await checkUpdates()); }
     if (p === '/api/update/apply' && m === 'POST') { if (!localOnly()) return; return send(res, 200, await installUpdate()); }
     if (p === '/api/restart' && m === 'POST') { if (!localOnly()) return; return send(res, 200, { restarting: requestRestart() }); }
+    if (p === '/api/instructions' && m === 'POST') {
+      if (!localOnly()) return;
+      const b = await json();
+      const ins = require('./instructions');
+      const out = Object.keys(ins.TARGETS).map((t) => (b.action === 'uninstall' ? ins.uninstall(t) : ins.install(t)));
+      store.log({ agent: 'you', action: 'settings', summary: b.action === 'uninstall' ? 'Removed the Cortex prompt from personal instruction files' : 'Added the Cortex prompt to personal instruction files' });
+      return send(res, 200, out);
+    }
     if (p === '/api/integrations/claude-code' && m === 'POST') {
       if (!localOnly()) return;
       const b = await json();

@@ -129,6 +129,7 @@ function run(vault, o = {}) {
     ['Cursor', () => steps.cursor(vault)],
     ['Windsurf', () => steps.windsurf(vault)],
     ['Codex CLI', () => steps.codex(vault)],
+    ['Agent prompt', () => { const ins = require('./instructions'); const r = ['claude-code', 'codex'].map((t) => ins.install(t)).filter((x) => !x.skipped); return r.length ? `added to ${r.map((x) => x.file).join(' and ')} (your own text there is untouched)` : { skip: true, msg: 'Claude Code / Codex not installed' }; }],
     ...(opts.autostart ? [['Start at login', () => steps.autostart(vault)]] : []),
   ];
   const results = [];

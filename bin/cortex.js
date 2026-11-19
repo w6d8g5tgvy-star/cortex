@@ -39,6 +39,7 @@ Usage:
   cortex config           Print copy-paste MCP configs for popular AI tools
   cortex hooks install    Stream Claude Code activity to Cortex's Live view (and phone)
   cortex hooks uninstall  Remove the Claude Code hooks
+  cortex instructions     Add the Cortex prompt to ~/.claude/CLAUDE.md and ~/.codex/AGENTS.md (uninstall to remove)
   cortex setup            Connect Cortex to all your AI apps, enable phone access, start at login
   cortex update           Check for an update and install it
   cortex help             Show this help
@@ -153,6 +154,16 @@ async function main() {
     console.log('\n  ◆ Cortex setup\n');
     for (const r of results) console.log(`  ${icon[r.status]} ${r.name.padEnd(16)} ${r.msg}`);
     console.log(`\n  Vault: ${vault}\n  Every file changed was backed up as <file>.cortex-backup.\n  Restart your AI apps so they pick up Cortex.\n  Next: open Settings → Phone access in the dashboard and scan the QR code with your phone.\n`);
+    return;
+  }
+
+  if (cmd === 'instructions') {
+    const ins = require('../src/instructions');
+    const sub = args[1] || 'install';
+    for (const t of Object.keys(ins.TARGETS)) {
+      const r = sub === 'uninstall' ? ins.uninstall(t) : ins.install(t);
+      console.log(`${ins.TARGETS[t].label}: ${r.skipped ? r.reason : sub === 'uninstall' ? (r.removed ? 'removed the Cortex block' : 'nothing to remove') : `Cortex prompt is in ${r.file}`}`);
+    }
     return;
   }
 

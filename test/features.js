@@ -311,6 +311,22 @@ out({type:'result',subtype:'success',is_error:false,result:'Fixed the login bug 
   assert.ok(ss2.some((h) => h.title === 'Alpha uses Postgres'));
   ok('templates, version history + restore, vault backup zip, health, gardener, briefing, stemmed search');
 
+  console.log('automatic instructions');
+  const claudeMd = path.join(home, '.claude', 'CLAUDE.md');
+  fs.writeFileSync(claudeMd, '# My rules\n\nAlways be brief.\n');
+  await post('/api/instructions', { action: 'install' });
+  await post('/api/instructions', { action: 'install' });
+  let cm = fs.readFileSync(claudeMd, 'utf8');
+  assert.ok(cm.startsWith('# My rules') && cm.includes('Always be brief.') && cm.includes('cortex_start') && cm.split('cortex:start').length === 2);
+  assert.ok(fs.existsSync(claudeMd + '.cortex-backup'));
+  assert.equal((await J(await fetch(base + '/api/settings'))).instructions['claude-code'], 'installed');
+  await post('/api/instructions', { action: 'uninstall' });
+  cm = fs.readFileSync(claudeMd, 'utf8');
+  assert.equal(cm, '# My rules\n\nAlways be brief.\n');
+  const brief2 = await J(await fetch(base + '/api/briefing'));
+  assert.ok(!/\*\*claude-ai\*\*/.test(brief2.markdown));
+  ok('Cortex prompt is added to (and removed from) personal instructions without touching your own text');
+
   c.close();
   srv.kill('SIGTERM');
   site.close();

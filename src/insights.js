@@ -72,7 +72,7 @@ function briefing(store, sinceMs = Date.now() - DAY) {
   const since = new Date(sinceMs).toISOString();
   const act = store.activity.filter((a) => a.ts >= since);
   const byAgent = {};
-  for (const a of act) if (!/^you/.test(a.agent) && a.agent !== 'cortex') (byAgent[a.agent] = byAgent[a.agent] || []).push(a);
+  for (const a of act) if (!/^you/.test(a.agent) && a.agent !== 'cortex' && a.action !== 'connect') (byAgent[a.agent] = byAgent[a.agent] || []).push(a);
   const done = store.list('task').filter((t) => t.meta.status === 'done' && (t.meta.completed || t.updated) >= since);
   const newMems = store.list('note').filter((n) => !n.meta.agent_journal && n.created >= since);
   const today = new Date().toISOString().slice(0, 10);

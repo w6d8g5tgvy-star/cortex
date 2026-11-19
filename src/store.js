@@ -429,7 +429,7 @@ class Store extends EventEmitter {
       notes: all.filter((r) => r.kind === 'note').length,
       mindQueued: all.filter((r) => r.kind === 'mind' && ['queued', 'fetched'].includes(r.meta.status)).length,
       actions24h: this.activity.filter((a) => a.ts >= dayAgo).length,
-      agents: [...new Set(this.activity.map((a) => a.agent))].length,
+      agents: [...new Set(this.activity.filter((a) => a.action !== 'connect' && !/^(you|cortex)/.test(a.agent)).map((a) => a.agent))].length,
     };
   }
 

@@ -1490,6 +1490,37 @@ function showRestarting() {
 }
 
 // ---------- SETTINGS ----------
+// ---------- "Link Claude & ChatGPT" guided panel ----------
+function linkAppsHtml(st, c) {
+  const tn = st.connector.tunnel;
+  const url = tn.url ? `${tn.url}/mcp/${st.connector.token}` : '';
+  const ins = st.instructions || {};
+  const done = (ok) => `<span class="chip ${ok ? 'ok' : ''}">${ok ? '✓ done' : 'to do'}</span>`;
+  const linkStep = url
+    ? `<div class="code"><pre class="wrap" style="font-size:11px">${esc(url)}</pre><button class="btn sm copy" data-copy-text="${esc(url)}">${icon('i-copy')}</button></div>`
+    : st.connector.cloudflared
+      ? `<button class="btn sm primary" data-tunnel="start">Create my connector link</button>`
+      : `<span class="small">First install <a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/" target="_blank" rel="noopener">cloudflared</a> (free), then reload this page.</span>`;
+  const step = (n, title, body) => `<div class="row" style="align-items:flex-start;gap:12px;margin:10px 0"><span class="av" style="background:var(--aurora);width:26px;height:26px;border-radius:8px;font-size:12px;flex:none">${n}</span><div style="flex:1;min-width:0"><b>${title}</b><div class="small muted" style="margin-top:3px">${body}</div></div></div>`;
+  const card = (name, sub, connectorHtml, instrHtml) => `<div class="panel" style="flex:1;min-width:300px"><h3>${name} <span class="small muted" style="text-transform:none;letter-spacing:0;font-weight:400">${sub}</span></h3>${connectorHtml}${instrHtml}</div>`;
+  const pc = ins['claude-code'] === 'installed' || ins.codex === 'installed';
+  return `<div class="panel" style="margin-bottom:18px;border-color:rgba(92,225,255,.3);box-shadow:var(--glow)">
+    <div class="row" style="flex-wrap:wrap"><div style="flex:1;min-width:260px"><div class="eyebrow">Make it automatic</div><h2 style="margin:0 0 4px;font-size:20px">Link Claude &amp; ChatGPT to Cortex</h2>
+      <p class="small muted" style="margin:0">Two things per app: the <b>connector</b> (so it can reach Cortex) and the <b>instructions</b> (so it always works through Cortex). Each step is one click here plus one paste there.</p></div>
+      <div class="target" style="min-width:300px"><b>Claude Code &amp; Codex on this PC</b>${done(pc)}<button class="btn sm ${pc ? '' : 'primary'}" data-instr="${pc ? 'uninstall' : 'install'}">${pc ? 'Remove' : 'Add to my instructions'}</button></div></div>
+    <div class="row" style="flex-wrap:wrap;align-items:stretch;margin-top:12px">
+      ${card('Claude', 'claude.ai, Claude apps, cloud sessions',
+        step(1, 'Get your connector link', linkStep) +
+        step(2, 'Add it to Claude', `<a class="btn sm" href="https://claude.ai/customize/connectors" target="_blank" rel="noopener">Open Claude connectors ↗</a> then <b>+ Add → Add custom connector</b>, paste the link, choose <b>No sign in</b>.`),
+        step(3, 'Make Claude always use Cortex', `<button class="btn sm" data-copy-prompt>Copy instructions</button> <a class="btn sm" href="https://claude.ai/settings" target="_blank" rel="noopener">Open Claude settings ↗</a><br>Paste into your <b>personal preferences</b> (applies to every chat), or into a Claude <b>Project's instructions</b>. Then start a new chat.`))}
+      ${card('ChatGPT', 'chatgpt.com and apps',
+        step(1, 'Get your connector link', linkStep) +
+        step(2, 'Add it to ChatGPT', `<a class="btn sm" href="https://chatgpt.com/" target="_blank" rel="noopener">Open ChatGPT ↗</a> then Settings → <b>Apps &amp; Connectors</b>, turn on <b>developer mode</b>, and create a connector with the link. Needs a plan that allows custom connectors. These menus couldn't be checked against ChatGPT's docs.`),
+        step(3, 'Make ChatGPT always use Cortex', `<button class="btn sm" data-copy-prompt>Copy instructions</button> then Settings → <b>Personalization → Custom instructions</b>, or a ChatGPT <b>Project's instructions</b>.`))}
+    </div>
+    <p class="small muted" style="margin:8px 0 0">The free link changes whenever the tunnel restarts. If an app stops reaching Cortex, come back here and paste the new link.</p>
+  </div>`;
+}
 const toggleRow = (id, on, title, desc, disabled) => `<label class="toggle-row ${disabled ? 'disabled' : ''}"><div><b>${title}</b><div class="small muted">${desc}</div></div><input type="checkbox" class="switch" data-setting="${id}" ${on ? 'checked' : ''} ${disabled ? 'disabled' : ''}></label>`;
 function updStatus(up) {
   if (!up) return '';
@@ -1533,6 +1564,7 @@ async function renderSettings() {
   }
   main.innerHTML = `
     <div class="page-head"><div><h1>Settings</h1><p>Cortex v${esc(c.version)}${L ? '' : ' · on this device you can view settings; change them on your computer'}</p></div></div>
+    ${L ? linkAppsHtml(st, c) : ''}
     <div class="settings-grid">
       <div class="panel"><h3>${icon('i-phone')} Phone access</h3>
         ${toggleRow('remote', st.remote.enabled, 'Allow my phone to connect', 'Use the dashboard from your phone: watch agents and your screen live, send agents messages, manage tasks and notes.', !L)}
@@ -1637,6 +1669,17 @@ async function renderSettings() {
   on('tn-start', async (e) => { e.target.disabled = true; e.target.textContent = 'Creating…'; await api('/api/tunnel', { method: 'POST', body: { action: 'start' } }).catch(fail); renderSettings(); });
   on('tn-stop', async () => { await api('/api/tunnel', { method: 'POST', body: { action: 'stop' } }).catch(fail); renderSettings(); });
   on('cn-rotate', async () => { if (!confirm('Make a new secret connector link? Apps using the old link will stop working.')) return; await api('/api/settings', { method: 'POST', body: { rotateConnector: true } }).catch(fail); renderSettings(); });
+  $$('[data-tunnel]').forEach((b) => (b.onclick = async () => { b.disabled = true; b.textContent = 'Creating… (up to 30s)'; await api('/api/tunnel', { method: 'POST', body: { action: 'start' } }).catch(fail); renderSettings(); }));
+  $$('[data-instr]').forEach((b) => (b.onclick = async () => {
+    try {
+      const r = await api('/api/instructions', { method: 'POST', body: { action: b.dataset.instr } });
+      const added = r.filter((x) => x.file && !x.skipped);
+      if (b.dataset.instr === 'uninstall') toast('Removed the Cortex block from your instruction files');
+      else if (!added.length) toast('Claude Code or Codex was not found on this PC. Install one, then try again.', true);
+      else toast(`Added to ${added.map((x) => x.file).join(' and ')}. New sessions will use Cortex automatically.`);
+      renderSettings();
+    } catch (e) { fail(e); }
+  }));
   on('bk-now', async () => { try { const r = await api('/api/backups', { method: 'POST' }); toast(`Backed up ${r.files} files`); renderSettings(); } catch (e) { fail(e); } });
   $$('[data-copy-prompt]').forEach((b) => (b.onclick = () => copy(c.agentPrompt)));
   $$('[data-copy-text]').forEach((b) => (b.onclick = () => copy(b.dataset.copyText)));

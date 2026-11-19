@@ -12,7 +12,8 @@ const AGENT_PROMPT = `You have access to Cortex, my personal project manager and
 6. Use my skills: call skill_list, then skill_get for any skill that matches the task, and follow it.
 7. Work through my Mind queue when asked: mind_list, mind_fetch (gets a video transcript or article text), then mind_complete with your summary or draft. Save good links with mind_add.
 8. Finish with activity_log and a short summary of what you did.
-Never store passwords, API keys or other secrets in Cortex.`;
+Never store passwords, API keys or other secrets in Cortex.
+If the cortex tools are not available in a session, tell me once and carry on without them.`;
 
 function snippets({ vault, port, host, token }) {
   const node = process.execPath;
