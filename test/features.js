@@ -349,6 +349,20 @@ out({type:'result',subtype:'success',is_error:false,result:'Fixed the login bug 
   assert.equal(addF.status, 200);
   ok('Claude Code is found in usual install folders, with install help and a custom path option');
 
+  // "Test Claude Code": signed in vs not signed in
+  const chk = await J(await post('/api/agents/check', { tool: 'claude' }));
+  assert.equal(chk.found, true);
+  assert.equal(chk.signedIn, true, JSON.stringify(chk));
+  fs.writeFileSync(path.join(bin, 'fake-claude-noauth.js'), `process.stdin.resume();process.stdin.on('end',()=>{if(process.argv.includes('--version')){console.log('2.9.0 (Claude Code)');process.exit(0)}console.log(JSON.stringify({type:'result',subtype:'error',is_error:true,result:'Invalid API key · Please run /login'}));process.exit(1)});`);
+  const noauth = shim('claude-noauth', 'fake-claude-noauth.js');
+  const chk2 = spawnSync(process.execPath, ['-e', `const {Store}=require(${JSON.stringify(path.join(ROOT, 'src', 'store'))});const {AgentRunner}=require(${JSON.stringify(path.join(ROOT, 'src', 'agents'))});new AgentRunner(new Store(${JSON.stringify(path.join(tmp, 'v3'))})).check('claude').then(r=>{console.log(JSON.stringify(r));process.exit(0)})`], { env: { ...ENV, CORTEX_CLAUDE_BIN: noauth }, encoding: 'utf8' });
+  const chkJ = JSON.parse(chk2.stdout);
+  assert.equal(chkJ.found, true);
+  assert.equal(chkJ.version, '2.9.0 (Claude Code)');
+  assert.equal(chkJ.signedIn, false);
+  assert.ok(/Not signed in/.test(chkJ.detail));
+  ok('Test button reports found / version / signed-in, and explains when Claude Code is not signed in');
+
   console.log('automatic instructions');
   const claudeMd = path.join(home, '.claude', 'CLAUDE.md');
   fs.writeFileSync(claudeMd, '# My rules\n\nAlways be brief.\n');

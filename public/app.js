@@ -1061,6 +1061,7 @@ async function renderAgents() {
               <div class="field"><label>Folder</label><select class="input" name="folder" id="l-folder">${ag.folders.map((f) => `<option>${esc(f)}</option>`).join('')}</select></div>
             </div>
             <div class="field"><label>What should it do?</label><textarea class="input" name="prompt" rows="4" placeholder="e.g. Fix the failing login test and explain what was wrong"></textarea></div>
+            <div class="row" style="flex-wrap:wrap;gap:8px">${Object.entries(ag.available).filter(([, t]) => t.installed).map(([k, t]) => `<button type="button" class="btn sm" data-agcheck="${k}" title="${esc(t.path)}">Test ${esc(t.label)}</button>`).join('')}<span class="small muted" id="agcheck-out" style="flex:1"></span></div>
             <div class="row"><span class="small muted" style="flex:1">The agent gets a Cortex brief: your instructions, the project's memories and tasks, and the rules to save what it learns. Cortex records the result in the project's agent journal.</span><button type="button" class="btn ghost sm" id="l-brief">Preview brief</button><button class="btn primary">${icon('i-bolt')} Start</button></div>
           </form>` : `<div class="empty">Starting agents from Cortex is off.<br>${S.local ? '<button class="btn primary" data-go="settings" style="margin-top:10px">Turn it on in Settings</button>' : 'Turn it on in Settings on your computer.'}</div>`) : `
           <form id="cmd" class="modal-body" style="padding:0">
@@ -1100,6 +1101,15 @@ async function renderAgents() {
   $$('[data-setpath]').forEach((b) => (b.onclick = () => saveAgents({ [b.dataset.setpath + 'Path']: $('#path-' + b.dataset.setpath).value }, 'Saved')));
   const rc = $('#recheck');
   if (rc) rc.onclick = () => { toast('Checking…'); renderAgents(); };
+  $$('[data-agcheck]').forEach((b) => (b.onclick = async () => {
+    const out = $('#agcheck-out');
+    b.disabled = true; out.textContent = 'Testing… (starts it and checks sign-in, up to a minute)';
+    try {
+      const r = await api('/api/agents/check', { method: 'POST', body: { tool: b.dataset.agcheck } });
+      out.innerHTML = `<span class="chip ${r.signedIn ? 'ok' : 'warn'}">${r.signedIn ? '✓ ready' : r.found ? 'needs attention' : 'not found'}</span> ${esc(r.version || '')} · ${esc(r.detail)}<br><code>${esc(r.path || '')}</code>`;
+    } catch (e) { out.textContent = e.message; }
+    b.disabled = false;
+  }));
   $$('[data-cmd-run]').forEach((b) => (b.onclick = async () => {
     b.disabled = true;
     try { const r = await api('/api/commands/run', { method: 'POST', body: { id: b.dataset.cmdRun } }); toast('Claude Code started on it: follow it below'); HUB.sel = r.id; store.set('hubSel', r.id); HUB.filter.status = 'active'; store.set('hubFilter', HUB.filter); renderAgents(); } catch (e) { fail(e); b.disabled = false; }

@@ -357,6 +357,17 @@ function buildTools(store) {
       run: (a) => brief.buildBrief(store, { project: a.project ? store.resolveProject(a.project) : undefined, task: a.task ? store.must(a.task).id : undefined }).text,
     },
     {
+      name: 'agent_check',
+      description: 'Check, on the computer running Cortex, whether Claude Code (or Codex) is installed where Cortex can start it, which version, and whether it is signed in. Makes one tiny request to test sign-in.',
+      inputSchema: { type: 'object', properties: { tool: str('claude or codex (default claude)', { enum: ['claude', 'codex'] }) } },
+      run: async (a, ctx) => {
+        const { AgentRunner } = require('./agents');
+        const r = await new AgentRunner(store).check(a.tool || 'claude');
+        store.log({ agent: ctx.agent, action: 'agent.check', summary: `${r.label}: ${r.found ? 'found' : 'not found'}${r.signedIn === true ? ', signed in' : r.signedIn === false ? ', not signed in' : ''}` });
+        return r;
+      },
+    },
+    {
       name: 'daily_briefing',
       description: 'Summary of what happened recently (agent work, completed tasks, new memories) and what needs the user (approvals, overdue and blocked tasks).',
       inputSchema: { type: 'object', properties: { hours: { type: 'number', description: 'Look back this many hours (default 24)' } } },

@@ -129,6 +129,41 @@ class AgentRunner {
   }
   bin(tool) { return this.resolved[tool] || process.env[TOOLS[tool].env] || TOOLS[tool].name; }
 
+  /** Run a CLI briefly and collect its output (stdin closed straight away, so nothing waits for input). */
+  runQuick(bin, args, cwd, timeoutMs) {
+    const win = process.platform === 'win32';
+    return new Promise((resolve) => {
+      let out = ''; let err = ''; let done = false;
+      const child = spawn(win ? `"${bin}"` : bin, win ? args.map((a) => (/[\s*"]/.test(a) ? `"${a.replace(/"/g, '')}"` : a)) : args, { cwd, shell: win, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+      child.stdin.on('error', () => {}); child.stdin.end();
+      child.stdout.on('data', (d) => { out += d; }); child.stderr.on('data', (d) => { err += d; });
+      const t = setTimeout(() => { if (!done) { done = true; try { child.kill(); } catch { /* gone */ } resolve({ code: null, out, err, timedOut: true }); } }, timeoutMs);
+      child.on('error', (e) => { if (!done) { done = true; clearTimeout(t); resolve({ code: -1, out, err: e.message }); } });
+      child.on('exit', (code) => { if (!done) { done = true; clearTimeout(t); resolve({ code, out, err }); } });
+    });
+  }
+
+  /** Is the CLI found, which version, and is it signed in? (makes one tiny request to check sign-in) */
+  async check(tool = 'claude') {
+    const avail = (await this.available())[tool];
+    if (!avail) throw new Error(`Unknown tool "${tool}"`);
+    const res = { tool, label: avail.label, found: avail.installed, path: avail.path, version: null, signedIn: null, detail: '' };
+    if (!avail.installed) { res.detail = avail.help; return res; }
+    const v = await this.runQuick(avail.path, ['--version'], this.vault, 20000);
+    res.version = (v.out || v.err).trim().split(/\r?\n/)[0] || null;
+    if (v.code !== 0 && !res.version) { res.detail = `Found, but it would not start: ${(v.err || 'unknown error').trim().slice(0, 300)}`; return res; }
+    if (tool !== 'claude') { res.detail = 'Found. Sign-in is checked the first time it runs.'; return res; }
+    const r = await this.runQuick(avail.path, ['-p', 'Reply with exactly: CORTEX-OK', '--output-format', 'json'], this.vault, 90000);
+    let result = null;
+    for (const line of String(r.out).split(/\r?\n/).reverse()) { try { const j = JSON.parse(line); if (j && (j.type === 'result' || j.result !== undefined)) { result = j; break; } } catch { /* not json */ } }
+    if (!result) { try { result = JSON.parse(r.out); } catch { /* not json */ } }
+    const text = [result && result.result, r.err, r.out].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+    if (r.timedOut) { res.signedIn = null; res.detail = 'Claude Code started but did not answer within 90 s. It may be waiting for a first-time sign-in: run "claude" once in a terminal.'; }
+    else if (result && !result.is_error && r.code === 0) { res.signedIn = true; res.detail = 'Signed in and working. Cortex can start it.'; }
+    else { res.signedIn = false; res.detail = /log ?in|auth|api key|credential|sign in|unauthori/i.test(text) ? `Not signed in. Open a terminal, run "claude" and sign in, then test again. (${text.slice(0, 200)})` : `It ran but returned an error: ${text.slice(0, 300) || 'exit code ' + r.code}`; }
+    return res;
+  }
+
   running() { return [...this.procs.keys()]; }
 
   launch({ tool = 'claude', prompt, cwd, permission = 'acceptEdits', maxMinutes = 120, project, task, resume, continues, from }) {

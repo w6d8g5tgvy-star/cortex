@@ -418,6 +418,12 @@ function startServer({ store, port, host, token: cliToken }) {
       return send(res, 200, { enabled: s.enabled, folders: s.folders, permission: s.permission, available, running: runner.running(), commands: agents.listCommands(vault, { limit: 60 }), agents: real, projectFolders, vault, local,
         ready: { enabled: s.enabled, folders: s.folders.length > 0, tool: Object.values(available).some((x) => x.installed) } });
     }
+    if (p === '/api/agents/check' && m === 'POST') {
+      const b = await json();
+      const r = await runner.check(b.tool || 'claude');
+      store.log({ agent, action: 'agent.check', summary: `${r.label}: ${r.found ? `found at ${r.path}` : 'not found'}${r.version ? ` (${r.version})` : ''}${r.signedIn === true ? ', signed in' : r.signedIn === false ? ', NOT signed in' : ''}` });
+      return send(res, 200, r);
+    }
     if (p === '/api/commands/run' && m === 'POST') {
       const s = conf().agents;
       if (!s.enabled) return send(res, 403, { error: 'Starting agents is turned off. Enable it in Settings → Agent control.' });
