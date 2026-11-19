@@ -412,9 +412,29 @@ function startServer({ store, port, host, token: cliToken }) {
     // ---- agent control ----
     if (p === '/api/agents' && m === 'GET') {
       const s = conf().agents;
-      return send(res, 200, { enabled: s.enabled, folders: s.folders, permission: s.permission, available: await runner.available(), running: runner.running(), commands: agents.listCommands(vault, { limit: 60 }) });
+      const available = await runner.available();
+      const real = [...new Set([...store.activity.filter((a) => !['connect', 'settings', 'setup'].includes(a.action)).map((a) => a.agent), ...sessions.list(vault).map((x) => x.agent)].filter((a) => a && !/^(you|cortex)/.test(a)))];
+      const projectFolders = store.list('project').filter((pr) => pr.meta.folder && fs.existsSync(pr.meta.folder)).map((pr) => ({ title: pr.title, folder: pr.meta.folder }));
+      return send(res, 200, { enabled: s.enabled, folders: s.folders, permission: s.permission, available, running: runner.running(), commands: agents.listCommands(vault, { limit: 60 }), agents: real, projectFolders, vault, local,
+        ready: { enabled: s.enabled, folders: s.folders.length > 0, tool: Object.values(available).some((x) => x.installed) } });
+    }
+    if (p === '/api/commands/run' && m === 'POST') {
+      const s = conf().agents;
+      if (!s.enabled) return send(res, 403, { error: 'Starting agents is turned off. Enable it in Settings → Agent control.' });
+      const b = await json();
+      const cmd = agents.listCommands(vault).find((c) => c.id === b.id);
+      if (!cmd) return send(res, 404, { error: 'Command not found' });
+      await runner.available();
+      const proj = cmd.project ? store.get('projects/' + cmd.project) : null;
+      const cwd = (proj && proj.meta.folder && agents.folderAllowed(proj.meta.folder, s.folders) && proj.meta.folder) || s.folders[0];
+      if (!cwd) return send(res, 400, { error: 'Add an allowed folder first (Agents → Start an agent).' });
+      const r = runner.launch({ tool: b.tool || 'claude', prompt: `${cmd.text}\n\n(This is Cortex command ${cmd.id}. When finished, call command_complete with id "${cmd.id}" and the result.)`, cwd, permission: s.permission, maxMinutes: s.maxMinutes, project: cmd.project, from: agent });
+      try { const f = path.join(vault, '.cortex', 'commands', cmd.id + '.json'); fs.writeFileSync(f, JSON.stringify({ ...cmd, status: 'taken', takenBy: `Claude Code run ${r.id}`, takenAt: new Date().toISOString() })); fs.closeSync(fs.openSync(f.replace(/\.json$/, '.claim'), 'a')); } catch { /* best effort */ }
+      broadcast({ type: 'live' });
+      return send(res, 201, r);
     }
     if (p === '/api/agents/run' && m === 'POST') {
+      await runner.available();
       const s = conf().agents;
       if (!s.enabled) return send(res, 403, { error: 'Starting agents is turned off. Enable it in Settings → Agent control on your computer.' });
       const b = await json();
@@ -490,6 +510,17 @@ function startServer({ store, port, host, token: cliToken }) {
         if (a.maxMinutes !== undefined) patch.agents.maxMinutes = Math.max(5, Math.min(600, Number(a.maxMinutes) || 120));
         if (a.instructions !== undefined) patch.agents.instructions = String(a.instructions).slice(0, 20000);
         if (a.saveGate !== undefined) patch.agents.saveGate = !!a.saveGate;
+        for (const k of ['claudePath', 'codexPath']) {
+          if (a[k] === undefined) continue;
+          const v = String(a[k]).trim().replace(/^"|"$/g, '');
+          if (v && !fs.existsSync(v)) return send(res, 400, { error: `File not found: ${v}` });
+          patch.agents[k] = v;
+        }
+        if (a.addFolder) {
+          const f = path.resolve(String(a.addFolder).trim().replace(/^"|"$/g, ''));
+          if (!fs.existsSync(f) || !fs.statSync(f).isDirectory()) return send(res, 400, { error: `Folder not found: ${f}` });
+          patch.agents.folders = [...new Set([...(conf().agents.folders || []), f])];
+        }
         if (a.phoneApprovals !== undefined) patch.agents.phoneApprovals = !!a.phoneApprovals;
         if (a.folders !== undefined) {
           const list = (Array.isArray(a.folders) ? a.folders : String(a.folders).split('\n')).map((x) => String(x).trim()).filter(Boolean);

@@ -1035,14 +1035,24 @@ async function renderAgents() {
   } catch (e) { return fail(e); }
   if (S.route[0] !== 'agents') return;
   const ag = HUB.data;
-  const toolOpts = Object.entries(ag.available).map(([k, t]) => `<option value="${k}" ${t.installed ? '' : 'disabled'}>${esc(t.label)}${t.installed ? '' : ' (not installed)'}</option>`).join('');
-  const seen = [...new Set([...S.activity.map((a) => a.agent), ...LIVE.sessions.map((s) => s.agent)].filter((a) => a && !/^you|cortex/.test(a)))];
+  const toolOpts = Object.entries(ag.available).map(([k, t]) => `<option value="${k}" ${t.installed ? '' : 'disabled'}>${esc(t.label)}${t.installed ? '' : ' (not found on this PC: see below)'}</option>`).join('');
+  const seen = (ag.agents || []).filter((a) => !/^anthropic/i.test(a));
+  const ready = ag.ready || {};
+  const missing = Object.entries(ag.available).filter(([, t]) => !t.installed);
+  const readyHtml = (!ready.folders || !ready.tool) ? `<div class="panel" style="padding:14px;margin-bottom:12px;border-color:rgba(255,195,92,.4)">
+      <h3 style="color:var(--warn);margin-bottom:8px">Almost ready: ${[!ready.tool && 'install an agent', !ready.folders && 'pick a folder'].filter(Boolean).join(' and ')}</h3>
+      ${!ready.tool ? missing.map(([k, t]) => `<div class="small" style="margin-bottom:10px"><b>${esc(t.label)} wasn't found on this PC.</b><br>${esc(t.help || '').replace(/ {2}(.+?) {2}/g, ' <code>$1</code> ')}
+        ${ag.local ? `<div class="row" style="margin-top:6px"><input class="input" id="path-${k}" placeholder="Or paste where it's installed, e.g. C:\\Users\\you\\.local\\bin\\claude.exe" style="flex:1"><button class="btn sm" data-setpath="${k}">Use this</button></div>` : ''}</div>`).join('') + `<button class="btn sm" id="recheck">Check again</button>` : ''}
+      ${!ready.folders ? `<div class="small" style="margin-top:8px"><b>Pick the folder(s) agents may work in.</b> They can only read and change files inside these.</div>
+        ${ag.local ? `<div class="row" style="margin-top:6px;flex-wrap:wrap">${(ag.projectFolders || []).map((pf) => `<button class="btn sm" data-addfolder="${esc(pf.folder)}">+ ${esc(pf.title)}</button>`).join('')}<button class="btn sm" data-addfolder="${esc(ag.vault)}">+ My Cortex vault</button></div>
+        <div class="row" style="margin-top:6px"><input class="input" id="add-folder" placeholder="C:\\Users\\you\\Desktop\\My Project" style="flex:1"><button class="btn sm primary" id="add-folder-btn">Add folder</button></div>` : '<span class="small muted">Add folders from the computer.</span>'}` : ''}
+    </div>` : '';
   main.innerHTML = `
     <div class="page-head"><div><div class="eyebrow">Agent control</div><h1>Your <span class="grad">agents</span></h1><p>Send agents to work from here or your phone, keep every chat organised by project, and see exactly what each one did.</p></div></div>
     <div class="hub-grid">
       <div class="panel">
         <div class="row" style="margin-bottom:14px"><div class="seg"><button data-hubtab="launch" class="${HUB.tab === 'launch' ? 'on' : ''}">${icon('i-bolt')} Start an agent</button><button data-hubtab="command" class="${HUB.tab === 'command' ? 'on' : ''}">${icon('i-send')} Send a command</button></div></div>
-        ${HUB.tab === 'launch' ? (ag.enabled ? `
+        ${HUB.tab === 'launch' ? (ag.enabled ? `${readyHtml}
           <form id="launch" class="modal-body" style="padding:0">
             <div class="grid2">
               <div class="field"><label>Agent</label><select class="input" name="tool">${toolOpts}</select></div>
@@ -1055,16 +1065,16 @@ async function renderAgents() {
           </form>` : `<div class="empty">Starting agents from Cortex is off.<br>${S.local ? '<button class="btn primary" data-go="settings" style="margin-top:10px">Turn it on in Settings</button>' : 'Turn it on in Settings on your computer.'}</div>`) : `
           <form id="cmd" class="modal-body" style="padding:0">
             <div class="grid2">
-              <div class="field"><label>Send to</label><select class="input" name="target"><option value="any">Any connected agent</option>${seen.map((a) => `<option>${esc(a)}</option>`).join('')}</select></div>
+              <div class="field"><label>Send to</label><select class="input" name="target"><option value="any">Any agent</option><option value="claude">Claude (any Claude app or Claude Code)</option><option value="openai">ChatGPT / Codex</option><option value="cursor">Cursor</option>${seen.length ? `<optgroup label="A specific agent">${seen.map((a) => `<option>${esc(a)}</option>`).join('')}</optgroup>` : ''}</select></div>
               <div class="field"><label>Project</label><select class="input" name="project">${projectOptions('', 'No project')}</select></div>
             </div>
             <div class="field"><label>Instruction</label><textarea class="input" name="text" rows="3" placeholder="e.g. Summarise today's open tasks and flag anything blocked"></textarea></div>
-            <div class="row"><span class="small muted" style="flex:1">Connected agents (Claude Desktop, Cursor, ChatGPT…) receive it the next time they check in with Cortex, and report back here.</span><button class="btn primary">${icon('i-send')} Send</button></div>
+            <div class="row"><span class="small muted" style="flex:1">A command waits until an agent checks in. Claude Code on this PC picks it up as soon as you start or message it; chat apps pick it up the next time you talk to them. To start work <b>right now</b>, use <b>Run now</b> on the command (or the Start an agent tab).</span><button class="btn primary">${icon('i-send')} Send</button></div>
           </form>`}
       </div>
       <div class="panel"><h3>${icon('i-send')} Commands</h3><div class="list" style="gap:8px;max-height:330px;overflow:auto">
         ${ag.commands.slice(0, 20).map((c) => `<div class="cmd"><div><b>${esc(c.text.slice(0, 140))}</b><div class="small muted">to ${esc(c.target === 'any' ? 'any agent' : c.target)}${c.takenBy ? ` · taken by ${esc(c.takenBy)}` : ''} · ${timeAgo(c.ts)}</div></div>
-          <div class="row" style="gap:6px"><span class="spill ${c.status === 'done' ? 'done' : c.status === 'failed' ? 'error' : c.status === 'taken' ? 'working' : ''}">${esc(c.status)}</span><button class="btn ghost sm" data-cmd-del="${esc(c.id)}" title="Remove">${icon('i-x')}</button></div>
+          <div class="row" style="gap:6px">${c.status === 'pending' && ag.enabled && ready.tool && ready.folders ? `<button class="btn sm primary" data-cmd-run="${esc(c.id)}" title="Start Claude Code on this PC to do it now">${icon('i-bolt')} Run now</button>` : ''}<span class="spill ${c.status === 'done' ? 'done' : c.status === 'failed' ? 'error' : c.status === 'taken' ? 'working' : ''}">${esc(c.status === 'pending' ? 'waiting for an agent' : c.status)}</span><button class="btn ghost sm" data-cmd-del="${esc(c.id)}" title="Remove">${icon('i-x')}</button></div>
           ${c.result ? `<div class="res">${esc(c.result)}</div>` : ''}</div>`).join('') || '<div class="empty">No commands yet.</div>'}
       </div></div>
     </div>
@@ -1083,6 +1093,17 @@ async function renderAgents() {
       <div style="margin-top:14px">${connectHtml(S.config)}</div>
     </details>`;
   bindConnect(S.config);
+  const saveAgents = async (body, okMsg) => { try { await api('/api/settings', { method: 'POST', body: { agents: body } }); toast(okMsg); renderAgents(); } catch (e) { fail(e); } };
+  $$('[data-addfolder]').forEach((b) => (b.onclick = () => saveAgents({ addFolder: b.dataset.addfolder }, 'Folder allowed')));
+  const af = $('#add-folder-btn');
+  if (af) af.onclick = () => saveAgents({ addFolder: $('#add-folder').value }, 'Folder allowed');
+  $$('[data-setpath]').forEach((b) => (b.onclick = () => saveAgents({ [b.dataset.setpath + 'Path']: $('#path-' + b.dataset.setpath).value }, 'Saved')));
+  const rc = $('#recheck');
+  if (rc) rc.onclick = () => { toast('Checking…'); renderAgents(); };
+  $$('[data-cmd-run]').forEach((b) => (b.onclick = async () => {
+    b.disabled = true;
+    try { const r = await api('/api/commands/run', { method: 'POST', body: { id: b.dataset.cmdRun } }); toast('Claude Code started on it: follow it below'); HUB.sel = r.id; store.set('hubSel', r.id); HUB.filter.status = 'active'; store.set('hubFilter', HUB.filter); renderAgents(); } catch (e) { fail(e); b.disabled = false; }
+  }));
   $$('[data-hubtab]').forEach((b) => (b.onclick = () => { HUB.tab = b.dataset.hubtab; store.set('hubTab', HUB.tab); renderAgents(); }));
   const lp = $('#l-proj');
   if (lp) {

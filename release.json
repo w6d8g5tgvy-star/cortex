@@ -1,7 +1,7 @@
 {
-  "version": "1.2.1",
+  "version": "1.2.2",
   "branch": "main",
   "url": "https://codeload.github.com/w6d8g5tgvy-star/cortex/tar.gz/refs/heads/main",
-  "notes": "Link Claude & ChatGPT in one panel; Cortex prompt added automatically to Claude Code/Codex personal instructions; briefing ignores connector check-ins.",
-  "date": "2026-11-19T20:33:50.173Z"
+  "notes": "Commanding agents fixed: Claude Code found in usual install folders (or a path you choose), clear install steps, folder picker, Run now on waiting commands, commands reach any Claude app and are picked up when Claude Code starts.",
+  "date": "2026-11-19T20:43:32.750Z"
 }

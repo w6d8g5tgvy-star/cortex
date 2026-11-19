@@ -94,6 +94,15 @@ function describeTool(name, input = {}) {
   }
 }
 
+function commandsText(vault) {
+  try {
+    const agents = require('./agents');
+    const cmds = agents.claimCommands(vault, 'claude-code');
+    if (!cmds.length) return '';
+    return 'The user sent you these commands through Cortex. Do them now (unless the user says otherwise), then report each one with command_complete (id + result):\n' + cmds.map((c) => `- [${c.id}]${c.project ? ` (project ${c.project})` : ''} ${c.text}`).join('\n');
+  } catch { return ''; }
+}
+
 function formatMessages(msgs) {
   return 'The user sent you the following message(s) from their phone via Cortex. Read them and act on them:\n' + msgs.map((m) => `- ${m.text}`).join('\n');
 }
@@ -166,7 +175,8 @@ async function runHook(input, vault) {
   if (ev === 'SessionStart') {
     const ctx = sessionContext(vault, input.cwd, input.source);
     sessions.upsert(vault, id, { ...base, project: ctx.project, ...(existing ? {} : { title: `Claude Code in ${where}`, status: 'waiting', step: 'Session started' }) }, { kind: 'status', text: `Session ${input.source || 'started'}${ctx.project ? ` · project ${ctx.project}` : ''} · Cortex brief loaded` });
-    return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: ctx.text } };
+    const cmds = commandsText(vault);
+    return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: (cmds ? cmds + '\n\n' : '') + ctx.text } };
   }
   if (ev === 'UserPromptSubmit') {
     const prompt = String(input.prompt || '').replace(/\s+/g, ' ').trim();
@@ -177,6 +187,8 @@ async function runHook(input, vault) {
     try { const r = recall(vault, project, prompt); if (r) parts.push(r); } catch { /* recall is best effort */ }
     const msgs = sessions.takeMessages(vault, id);
     if (msgs.length) parts.push(formatMessages(msgs));
+    const cmds = commandsText(vault);
+    if (cmds) parts.push(cmds);
     return parts.length ? { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: parts.join('\n\n') } } : null;
   }
   if (ev === 'PostToolUse') {

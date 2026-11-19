@@ -311,6 +311,44 @@ out({type:'result',subtype:'success',is_error:false,result:'Fixed the login bug 
   assert.ok(ss2.some((h) => h.title === 'Alpha uses Postgres'));
   ok('templates, version history + restore, vault backup zip, health, gardener, briefing, stemmed search');
 
+  console.log('commanding fixes');
+  // a command addressed to the claude.ai check-in name reaches a Claude agent (family match)
+  const cFam = await J(await post('/api/commands', { text: 'Family test', target: 'AnthropicClaudeAI' }));
+  const ccAgent = mcp('claude-code');
+  await ccAgent.ready;
+  const famGot = await ccAgent.tool('messages_check');
+  assert.ok(famGot.commands_from_user.some((x) => x.id === cFam.id));
+  ccAgent.close();
+  // Claude Code picks up waiting commands the moment a session starts
+  const cHook = await J(await post('/api/commands', { text: 'Do this at session start', target: 'claude' }));
+  const ssCmd = hook({ hook_event_name: 'SessionStart', session_id: 'cmd-sess', cwd: codeA, source: 'startup' });
+  assert.ok(ssCmd.hookSpecificOutput.additionalContext.includes(cHook.id) && ssCmd.hookSpecificOutput.additionalContext.includes('Do this at session start'));
+  // "Run now" starts Claude Code on a waiting command
+  const cRun = await J(await post('/api/commands', { text: 'Run me now please', target: 'any', project: 'alpha-app' }));
+  const runNow = await J(await post('/api/commands/run', { id: cRun.id }));
+  assert.ok(runNow.id);
+  await sleep(1500);
+  const rnCall = JSON.parse(fs.readFileSync(path.join(tmp, 'claude-call.json'), 'utf8'));
+  assert.ok(rnCall.stdin.includes('Run me now please') && rnCall.stdin.includes(cRun.id) && rnCall.cwd === codeA);
+  assert.equal((await J(await fetch(base + '/api/agents'))).commands.find((x) => x.id === cRun.id).status, 'taken');
+  ok('commands reach any Claude app, are picked up at session start, and can be run immediately');
+  // Claude Code is found in the usual install folders even when it isn't on PATH
+  const fakeHome2 = path.join(tmp, 'home2');
+  const lb = path.join(fakeHome2, '.local', 'bin');
+  fs.mkdirSync(lb, { recursive: true });
+  fs.writeFileSync(path.join(lb, process.platform === 'win32' ? 'claude.exe' : 'claude'), '#!/bin/sh\n');
+  const det = spawnSync(process.execPath, ['-e', `const {Store}=require(${JSON.stringify(path.join(ROOT, 'src', 'store'))});const {AgentRunner}=require(${JSON.stringify(path.join(ROOT, 'src', 'agents'))});const r=new AgentRunner(new Store(${JSON.stringify(path.join(tmp, 'v2'))}));r.available().then(a=>{console.log(JSON.stringify(a));process.exit(0)})`], { env: { PATH: '/usr/bin:/bin', HOME: fakeHome2, USERPROFILE: fakeHome2 }, encoding: 'utf8' });
+  const detJ = JSON.parse(det.stdout);
+  assert.equal(detJ.claude.installed, true, det.stderr);
+  assert.ok(detJ.claude.path.startsWith(lb));
+  assert.equal(detJ.codex.installed, false);
+  assert.ok(/npm install -g @openai\/codex/.test(detJ.codex.help));
+  const badPath = await post('/api/settings', { agents: { claudePath: '/nope/claude' } });
+  assert.equal(badPath.status, 400);
+  const addF = await post('/api/settings', { agents: { addFolder: codeA } });
+  assert.equal(addF.status, 200);
+  ok('Claude Code is found in usual install folders, with install help and a custom path option');
+
   console.log('automatic instructions');
   const claudeMd = path.join(home, '.claude', 'CLAUDE.md');
   fs.writeFileSync(claudeMd, '# My rules\n\nAlways be brief.\n');

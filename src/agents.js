@@ -35,7 +35,21 @@ function listCommands(vault, { limit = 100 } = {}) {
   return files.map((f) => readJson(path.join(cmdDir(vault), f))).filter(Boolean).sort((a, b) => (a.ts < b.ts ? 1 : -1)).slice(0, limit);
 }
 
-const matches = (target, agent) => target === 'any' || String(target).toLowerCase() === String(agent || '').toLowerCase();
+// Agents identify themselves differently (claude.ai checks in as "AnthropicClaudeAI", Claude Code as "claude-code"…).
+// Commands match by family, so "send to Claude" reaches whichever Claude app checks in next.
+function family(name) {
+  const n = String(name || '').toLowerCase();
+  if (/anthropic|claude/.test(n)) return 'claude';
+  if (/openai|chatgpt|gpt|codex/.test(n)) return 'openai';
+  if (/cursor/.test(n)) return 'cursor';
+  return n;
+}
+const matches = (target, agent) => {
+  const t = String(target || 'any').toLowerCase();
+  if (t === 'any') return true;
+  if (t === String(agent || '').toLowerCase()) return true;
+  return family(t) === family(agent);
+};
 
 /** Claim pending commands for this agent (each command goes to exactly one agent). */
 function claimCommands(vault, agent, max = 5) {
@@ -71,22 +85,49 @@ const commandView = (c) => ({ id: c.id, instruction: c.text, project: c.project,
 // ---------------- launcher ----------------
 const which = (bin) => new Promise((res) => execFile(process.platform === 'win32' ? 'where' : 'which', [bin], (e, out) => res(e ? null : String(out).split(/\r?\n/)[0].trim() || null)));
 
+const os = require('os');
+const HOME = os.homedir();
+const APPDATA = process.env.APPDATA || path.join(HOME, 'AppData', 'Roaming');
+const LOCALAPPDATA = process.env.LOCALAPPDATA || path.join(HOME, 'AppData', 'Local');
+// Usual install locations, so Cortex finds the CLIs even when they aren't on the PATH it was started with.
+const CANDIDATES = {
+  claude: process.platform === 'win32'
+    ? [path.join(HOME, '.local', 'bin', 'claude.exe'), path.join(APPDATA, 'npm', 'claude.cmd'), path.join(HOME, '.claude', 'local', 'claude.exe'), path.join(HOME, '.claude', 'local', 'claude.cmd'), path.join(LOCALAPPDATA, 'Programs', 'claude-code', 'claude.exe'), path.join(process.env.ProgramFiles || 'C:\\Program Files', 'nodejs', 'claude.cmd')]
+    : [path.join(HOME, '.local', 'bin', 'claude'), path.join(HOME, '.claude', 'local', 'claude'), '/usr/local/bin/claude', '/opt/homebrew/bin/claude', path.join(HOME, '.npm-global', 'bin', 'claude'), path.join(HOME, '.bun', 'bin', 'claude')],
+  codex: process.platform === 'win32'
+    ? [path.join(APPDATA, 'npm', 'codex.cmd'), path.join(HOME, '.local', 'bin', 'codex.exe'), path.join(process.env.ProgramFiles || 'C:\\Program Files', 'nodejs', 'codex.cmd')]
+    : [path.join(HOME, '.local', 'bin', 'codex'), '/usr/local/bin/codex', '/opt/homebrew/bin/codex', path.join(HOME, '.npm-global', 'bin', 'codex')],
+};
+const INSTALL_HELP = {
+  claude: process.platform === 'win32'
+    ? 'Install Claude Code: open PowerShell and run  irm https://claude.ai/install.ps1 | iex  (or, with Node.js: npm install -g @anthropic-ai/claude-code). Then run  claude  once to sign in, and click "Check again".'
+    : 'Install Claude Code: run  curl -fsSL https://claude.ai/install.sh | bash  (or npm install -g @anthropic-ai/claude-code). Then run  claude  once to sign in, and click "Check again".',
+  codex: 'Install Codex: npm install -g @openai/codex, then run  codex  once to sign in, and click "Check again".',
+};
 const TOOLS = {
-  claude: { label: 'Claude Code', agent: 'claude-code', bin: () => process.env.CORTEX_CLAUDE_BIN || 'claude' },
-  codex: { label: 'Codex', agent: 'codex', bin: () => process.env.CORTEX_CODEX_BIN || 'codex' },
+  claude: { label: 'Claude Code', agent: 'claude-code', env: 'CORTEX_CLAUDE_BIN', name: 'claude' },
+  codex: { label: 'Codex', agent: 'codex', env: 'CORTEX_CODEX_BIN', name: 'codex' },
 };
 
 class AgentRunner {
-  constructor(store) { this.store = store; this.vault = store.vault; this.procs = new Map(); }
+  constructor(store) { this.store = store; this.vault = store.vault; this.procs = new Map(); this.resolved = {}; }
 
+  /** Find each CLI: custom path from Settings → env var → PATH → usual install folders. */
   async available() {
+    const conf = require('./settings').load(this.vault).agents;
     const out = {};
     for (const [k, t] of Object.entries(TOOLS)) {
-      const b = t.bin();
-      out[k] = { label: t.label, installed: path.isAbsolute(b) ? fs.existsSync(b) : !!(await which(b)) };
+      const custom = conf[k + 'Path'] || process.env[t.env];
+      let found = null;
+      if (custom) found = fs.existsSync(custom) ? custom : null;
+      if (!found) { const w = await which(t.name); if (w && fs.existsSync(w)) found = w; }
+      if (!found) found = CANDIDATES[k].find((c) => fs.existsSync(c)) || null;
+      this.resolved[k] = found;
+      out[k] = { label: t.label, installed: !!found, path: found, custom: custom || null, help: found ? null : INSTALL_HELP[k] };
     }
     return out;
   }
+  bin(tool) { return this.resolved[tool] || process.env[TOOLS[tool].env] || TOOLS[tool].name; }
 
   running() { return [...this.procs.keys()]; }
 
@@ -121,7 +162,7 @@ class AgentRunner {
     const win = process.platform === 'win32';
     // The prompt goes through stdin, never through a shell command line.
     const spawnArgs = win ? args.map((a) => (/[\s*]/.test(a) ? `"${a}"` : a)) : args; // cmd shell needs quoting; args here never contain user text
-    const child = spawn(win ? `"${t.bin()}"` : t.bin(), spawnArgs, { cwd, env: { ...process.env, CORTEX_RUN_ID: id }, shell: win, detached: !win, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(win ? `"${this.bin(tool)}"` : this.bin(tool), spawnArgs, { cwd, env: { ...process.env, CORTEX_RUN_ID: id }, shell: win, detached: !win, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     const rec = { child, id, tool, stderr: [], ended: false, stopped: false, project: b.project, task: b.task, prompt: prompt || title, agent: t.agent };
     this.procs.set(id, rec);
     child.stdin.on('error', () => {});
@@ -211,4 +252,4 @@ function folderAllowed(dir, allowed) {
   return (allowed || []).some((a) => { const r = path.resolve(a).toLowerCase(); return d === r || d.startsWith(r + path.sep); });
 }
 
-module.exports = { createCommand, listCommands, claimCommands, completeCommand, deleteCommand, commandView, AgentRunner, folderAllowed, TOOLS };
+module.exports = { family, createCommand, listCommands, claimCommands, completeCommand, deleteCommand, commandView, AgentRunner, folderAllowed, TOOLS };
