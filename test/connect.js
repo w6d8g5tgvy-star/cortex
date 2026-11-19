@@ -59,6 +59,18 @@ const ok = (m) => console.log('  ✓ ' + m);
     ok('hook command runs in Windows PowerShell');
   }
 
+  const { PublicLink } = require('../src/tunnel');
+  const link = new PublicLink(7777, () => 'tailscale');
+  let stops = 0;
+  link.quick.stop = () => { stops++; };
+  link.funnel.start = async () => ({ running: false, url: null });
+  await link.start();
+  assert.equal(stops, 0);
+  link.funnel.start = async () => ({ running: true, url: 'https://example.test' });
+  await link.start();
+  assert.equal(stops, 1);
+  ok('quick tunnel survives pending approval and closes after successful handover');
+
   const { AGENT_PROMPT } = require(path.join(ROOT, 'src', 'snippets.js'));
   const mcpSrc = fs.readFileSync(path.join(ROOT, 'src', 'mcp.js'), 'utf8');
   const fields = ['user_instructions', 'project_instructions', 'commands_from_user', 'messages_from_user'];

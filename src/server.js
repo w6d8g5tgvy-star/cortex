@@ -494,7 +494,7 @@ function startServer({ store, port, host, token: cliToken }) {
       if (!localOnly()) return;
       const b = await json();
       if (b.provider === 'tailscale' || b.provider === 'cloudflare') {
-        if (b.provider !== tunnel.provider && b.action === 'start') await tunnel.stop();
+        if (b.provider !== tunnel.provider && b.provider !== 'tailscale' && b.action === 'start') await tunnel.stop();
         settingsMod.update(vault, { connector: { provider: b.provider } });
       }
       let st;

@@ -1,7 +1,7 @@
 {
-    "version":  "1.2.4",
-    "branch":  "main",
-    "url":  "https://codeload.github.com/w6d8g5tgvy-star/cortex/tar.gz/refs/heads/main",
-    "notes":  "Permanent connector link via Tailscale Funnel (no more dead connectors after restarts), Claude Code hooks fixed for Windows PowerShell and self-repaired, instant Claude Code sign-in check, rewritten agent prompt.",
-    "date":  "2026-11-19T21:01:38.579Z"
+  "version": "1.2.5",
+  "branch": "main",
+  "url": "https://codeload.github.com/w6d8g5tgvy-star/cortex/tar.gz/refs/heads/main",
+  "notes": "Keep the Cloudflare connector available while Tailscale Funnel awaits approval.",
+  "date": "2026-11-19T21:07:36.145Z"
 }

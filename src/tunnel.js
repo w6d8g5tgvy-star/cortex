@@ -141,7 +141,12 @@ class PublicLink {
   get active() { return this.provider === 'tailscale' ? this.funnel : this.quick; }
   get url() { return this.active.url; }
   status() { return { provider: this.provider, permanent: this.provider === 'tailscale', ...this.active.status() }; }
-  async start() { if (this.provider === 'tailscale') this.quick.stop(); await this.active.start(); return this.status(); }
+  async start() {
+    const target = this.active;
+    const result = await target.start();
+    if (target === this.funnel && this.active === target && result.running && result.url) this.quick.stop();
+    return this.status();
+  }
   async stop() { this.quick.stop(); if (this.provider === 'tailscale') await this.funnel.stop(); return this.status(); }
   async refresh() { if (this.provider === 'tailscale') await this.funnel.refresh(); return this.status(); }
   async tools() { const [cloudflared, tailscale] = await Promise.all([this.quick.available(), this.funnel.available()]); return { cloudflared, tailscale }; }
