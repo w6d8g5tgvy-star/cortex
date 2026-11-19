@@ -10,7 +10,9 @@ const CLI = path.resolve(__dirname, '..', 'bin', 'cortex.js');
 const SETTINGS = path.join(os.homedir(), '.claude', 'settings.json');
 const SKILL_SRC = path.resolve(__dirname, '..', 'integrations', 'claude-code', 'SKILL.md');
 const SKILL_DEST = path.join(os.homedir(), '.claude', 'skills', 'cortex', 'SKILL.md');
-const EVENTS = ['UserPromptSubmit', 'PostToolUse', 'Notification', 'Stop', 'SessionEnd'];
+// Documented Claude Code hook events. Timeouts are in seconds.
+const EVENTS = { SessionStart: 20, UserPromptSubmit: 20, PostToolUse: 10, Notification: 10, PermissionRequest: 150, Stop: 20, SessionEnd: 5 };
+const MATCHER = { PostToolUse: '*' };
 const MARK = 'cortex.js" hook';
 
 const q = (s) => `"${s}"`;
@@ -44,19 +46,27 @@ function status() {
 function install({ vault }) {
   const cfg = strip(readSettings());
   cfg.hooks = cfg.hooks || {};
-  const cmd = { type: 'command', command: hookCommand(vault), timeout: 10 };
-  for (const ev of EVENTS) {
+  for (const [ev, timeout] of Object.entries(EVENTS)) {
+    const cmd = { type: 'command', command: hookCommand(vault), timeout };
     cfg.hooks[ev] = cfg.hooks[ev] || [];
-    cfg.hooks[ev].push(ev === 'PostToolUse' ? { matcher: '*', hooks: [cmd] } : { hooks: [cmd] });
+    cfg.hooks[ev].push(MATCHER[ev] ? { matcher: MATCHER[ev], hooks: [cmd] } : { hooks: [cmd] });
   }
   writeSettings(cfg);
-  try { fs.mkdirSync(path.dirname(SKILL_DEST), { recursive: true }); fs.copyFileSync(SKILL_SRC, SKILL_DEST); } catch { /* optional */ }
+  // the cortex skill is only written if you don't already have your own skill called "cortex"
+  try {
+    const dir = path.dirname(SKILL_DEST);
+    if (!fs.existsSync(dir) || fs.existsSync(path.join(dir, '.cortex-managed'))) {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.copyFileSync(SKILL_SRC, SKILL_DEST);
+      fs.writeFileSync(path.join(dir, '.cortex-managed'), 'Installed by Cortex.\n');
+    }
+  } catch { /* optional */ }
   return { ok: true, ...status(), backup: SETTINGS + '.cortex-backup' };
 }
 
 function uninstall() {
   writeSettings(strip(readSettings()));
-  try { fs.rmSync(path.dirname(SKILL_DEST), { recursive: true, force: true }); } catch { /* ignore */ }
+  try { const dir = path.dirname(SKILL_DEST); if (fs.existsSync(path.join(dir, '.cortex-managed'))) fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
   return { ok: true, ...status() };
 }
 
@@ -88,27 +98,107 @@ function formatMessages(msgs) {
   return 'The user sent you the following message(s) from their phone via Cortex. Read them and act on them:\n' + msgs.map((m) => `- ${m.text}`).join('\n');
 }
 
-function runHook(input, vault) {
+const clip = (s, n) => { s = String(s || ''); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
+const SAVE_TOOLS = /^mcp__cortex__(memory_write|memory_update|mind_complete|activity_log|skill_save)$/;
+const CHANGE_TOOLS = new Set(['Edit', 'MultiEdit', 'Write', 'NotebookEdit']);
+
+function loadStore(vault) { const { Store } = require('./store'); return new Store(vault); }
+
+function sessionContext(vault, cwd, source) {
+  const journal = require('./journal');
+  const brief = require('./brief');
+  const project = journal.projectForFolder(vault, cwd);
+  const store = loadStore(vault);
+  const b = brief.buildBrief(store, { project });
+  const header = project
+    ? `[Cortex] This folder belongs to the Cortex project "${project}". Below is its brief: the user's instructions, this project's memories (they apply only to this project), system memories (they apply to every project) and recent agent work. Build on it. Cortex records what you do in notes/${project}/agent-journal.md automatically; you must still save what you learn with memory_write (project "${project}").`
+    : '[Cortex] This folder is not linked to a Cortex project, so only system memories are loaded. Link it by setting the project\'s "folder" in Cortex.';
+  return { project, text: clip(`${header}\n\n${b.text}`, 9500) };
+}
+
+function recall(vault, project, prompt) {
+  const store = loadStore(vault);
+  const f = project ? { scope: 'project+system', projectScope: project } : { scope: 'system' };
+  const hits = store.search(prompt, { kind: 'note', limit: 5, minMatch: 1, ...f }).filter((h) => !h.rec.meta.agent_journal && h.score >= 6);
+  if (!hits.length) return '';
+  return clip('[Cortex] Memories related to this request (read the full note with memory_get if relevant):\n' + hits.map((h) => `- ${h.rec.title} (${h.rec.id}${h.rec.meta.project ? '' : ', system'}): ${h.snippet}`).join('\n'), 3500);
+}
+
+async function waitForApproval(vault, sid, input) {
+  const settings = require('./settings').load(vault);
+  if (!settings.agents.phoneApprovals) return null; // normal permission dialog on the computer
+  const dir = path.join(vault, '.cortex', 'approvals');
+  fs.mkdirSync(dir, { recursive: true });
+  const id = 'ap-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const f = path.join(dir, id + '.json');
+  const req = { id, session: sid, tool: input.tool_name, summary: describeTool(input.tool_name, input.tool_input || {}), input: clip(JSON.stringify(input.tool_input || {}), 2000), cwd: input.cwd, ts: new Date().toISOString(), status: 'pending' };
+  fs.writeFileSync(f, JSON.stringify(req));
+  sessions.upsert(vault, sid, { status: 'needs-you', step: `Waiting for your approval: ${req.summary}`, approval: id }, { kind: 'status', text: `🔐 Asked to: ${req.summary}` });
+  const wait = Math.max(10, Math.min(140, Number(settings.agents.approvalWaitSeconds) || 120)) * 1000;
+  const t0 = Date.now();
+  while (Date.now() - t0 < wait) {
+    await new Promise((r) => setTimeout(r, 700));
+    let cur;
+    try { cur = JSON.parse(fs.readFileSync(f, 'utf8')); } catch { continue; }
+    if (cur.status === 'allow' || cur.status === 'deny') {
+      sessions.upsert(vault, sid, { status: 'working', step: cur.status === 'allow' ? `Approved: ${req.summary}` : 'Denied by you', approval: null }, { kind: 'status', text: cur.status === 'allow' ? '✓ You approved from Cortex' : '✗ You denied from Cortex' });
+      return cur.status === 'allow'
+        ? { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'allow' } } }
+        : { hookSpecificOutput: { hookEventName: 'PermissionRequest', decision: { behavior: 'deny', message: cur.note ? `The user denied this from Cortex: ${cur.note}` : 'The user denied this from Cortex.' } } };
+    }
+  }
+  try { const cur = JSON.parse(fs.readFileSync(f, 'utf8')); if (cur.status === 'pending') fs.writeFileSync(f, JSON.stringify({ ...cur, status: 'expired' })); } catch { /* ignore */ }
+  sessions.upsert(vault, sid, { approval: null }, { kind: 'status', text: 'No answer from Cortex in time; asking on the computer instead' });
+  return null; // fall back to the normal dialog
+}
+
+async function runHook(input, vault) {
   const ev = input.hook_event_name;
   if (!ev || !input.session_id) return null;
-  const id = 'cc-' + sessions.safeId(input.session_id).slice(0, 40);
+  // Agents launched from Cortex carry CORTEX_RUN_ID so their hooks report into the same Live card.
+  const launched = !!process.env.CORTEX_RUN_ID;
+  const id = launched ? sessions.safeId(process.env.CORTEX_RUN_ID) : 'cc-' + sessions.safeId(input.session_id).slice(0, 40);
   const where = input.cwd ? path.basename(input.cwd) : '';
   const base = { agent: 'claude-code', cwd: input.cwd, workspace: where };
   const existing = sessions.get(vault, id);
+  const settings = require('./settings').load(vault);
+
+  if (ev === 'SessionStart') {
+    const ctx = sessionContext(vault, input.cwd, input.source);
+    sessions.upsert(vault, id, { ...base, project: ctx.project, ...(existing ? {} : { title: `Claude Code in ${where}`, status: 'waiting', step: 'Session started' }) }, { kind: 'status', text: `Session ${input.source || 'started'}${ctx.project ? ` · project ${ctx.project}` : ''} · Cortex brief loaded` });
+    return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: ctx.text } };
+  }
   if (ev === 'UserPromptSubmit') {
     const prompt = String(input.prompt || '').replace(/\s+/g, ' ').trim();
-    sessions.upsert(vault, id, { ...base, title: prompt.slice(0, 140) || (existing && existing.title) || 'Claude Code session', status: 'working', step: 'Thinking…', progress: null }, { kind: 'prompt', text: `▶ ${prompt.slice(0, 300)}` });
+    const project = (existing && existing.project) || require('./journal').projectForFolder(vault, input.cwd);
+    // each prompt starts a new "turn": reset what we track for the journal and the save gate
+    sessions.upsert(vault, id, { ...base, project, title: prompt.slice(0, 140) || (existing && existing.title) || 'Claude Code session', status: 'working', step: 'Thinking…', progress: null, turnPrompt: prompt.slice(0, 600), files: [], commands: 0, saved: false, gateUsed: false }, { kind: 'prompt', text: `▶ ${prompt.slice(0, 300)}` });
+    const parts = [];
+    try { const r = recall(vault, project, prompt); if (r) parts.push(r); } catch { /* recall is best effort */ }
     const msgs = sessions.takeMessages(vault, id);
-    return msgs.length ? { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: formatMessages(msgs) } } : null;
+    if (msgs.length) parts.push(formatMessages(msgs));
+    return parts.length ? { hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: parts.join('\n\n') } } : null;
   }
   if (ev === 'PostToolUse') {
     const text = describeTool(input.tool_name, input.tool_input);
-    sessions.upsert(vault, id, { ...base, status: 'working', step: text, ...(existing ? {} : { title: `Claude Code in ${where}` }) }, { kind: 'tool', text });
+    const cur = existing || {};
+    const patch = { ...base, status: 'working', step: text, ...(existing ? {} : { title: `Claude Code in ${where}` }) };
+    const ti = input.tool_input || {};
+    if (CHANGE_TOOLS.has(input.tool_name)) patch.files = [...new Set([...(cur.files || []), path.basename(String(ti.file_path || ti.notebook_path || ''))].filter(Boolean))].slice(-60);
+    if (input.tool_name === 'Bash') patch.commands = (cur.commands || 0) + 1;
+    if (SAVE_TOOLS.test(input.tool_name || '')) patch.saved = true;
+    sessions.upsert(vault, id, patch, { kind: 'tool', text });
     const msgs = sessions.takeMessages(vault, id);
     return msgs.length ? { hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: formatMessages(msgs) } } : null;
   }
+  if (ev === 'PermissionRequest') {
+    if (!existing) sessions.upsert(vault, id, { ...base, title: `Claude Code in ${where}` });
+    return waitForApproval(vault, id, input);
+  }
   if (ev === 'Notification') {
-    sessions.upsert(vault, id, { ...base, status: 'needs-you', step: String(input.message || 'Needs your attention') }, { kind: 'status', text: `⚠ ${input.message || 'Needs your attention'}` });
+    const type = input.notification_type || '';
+    const needs = /permission|idle|input|elicitation/.test(type) || !type;
+    sessions.upsert(vault, id, { ...base, ...(needs ? { status: 'needs-you' } : {}), step: String(input.message || 'Needs your attention') }, { kind: 'status', text: `⚠ ${input.message || 'Needs your attention'}` });
     return null;
   }
   if (ev === 'Stop') {
@@ -118,14 +208,27 @@ function runHook(input, vault) {
       sessions.upsert(vault, id, { status: 'working', step: 'Reading your message…' });
       return { decision: 'block', reason: formatMessages(msgs) };
     }
-    sessions.upsert(vault, id, { status: 'waiting', step: 'Finished. Waiting for your next instruction' }, { kind: 'status', text: '✓ Finished turn' });
+    const worked = (existing.files || []).length > 0 || (existing.commands || 0) > 0;
+    // Save gate: if Claude changed things this turn but saved nothing to Cortex, ask once before it stops.
+    if (settings.agents.saveGate !== false && worked && !existing.saved && !existing.gateUsed && !input.stop_hook_active) {
+      sessions.upsert(vault, id, { gateUsed: true, step: 'Saving what it learned to Cortex…' }, { kind: 'status', text: 'Save gate: asked Claude to record what it learned' });
+      const p = existing.project;
+      return { decision: 'block', reason: `Before you finish (Cortex save gate): you changed things in this turn but saved nothing to Cortex. Call memory_write${p ? ` with project "${p}"` : ''} to record what you learned that future sessions need (decisions, how things work, gotchas, what is left to do), updating an existing note if one covers it. If genuinely nothing is worth keeping, call activity_log with a one-line summary instead. Then give your final answer.` };
+    }
+    // the real end of the turn: write the journal entry (launched runs are journaled by the runner instead)
+    if (!launched) {
+      try {
+        require('./journal').session(vault, existing.project, { agent: 'claude-code', title: existing.turnPrompt || existing.title, outcome: input.last_assistant_message, status: 'done', files: existing.files || [], commands: existing.commands || 0, savedMemory: !!existing.saved, source: where ? `in ${where}` : '' });
+      } catch { /* never break Claude */ }
+    }
+    sessions.upsert(vault, id, { status: 'waiting', step: 'Finished. Waiting for your next instruction', result: clip(input.last_assistant_message || '', 4000), ...(launched ? {} : { files: [], commands: 0 }) }, { kind: 'status', text: '✓ Finished turn' });
     return null;
   }
   if (ev === 'SessionEnd') {
-    if (existing) sessions.upsert(vault, id, { status: 'done', step: 'Session ended' }, { kind: 'status', text: 'Session ended' });
+    if (existing) sessions.upsert(vault, id, { status: 'done', step: 'Session ended' }, { kind: 'status', text: `Session ended${input.reason ? ` (${input.reason})` : ''}` });
     return null;
   }
   return null;
 }
 
-module.exports = { install, uninstall, status, runHook, describeTool, hookCommand };
+module.exports = { install, uninstall, status, runHook, describeTool, hookCommand, EVENTS };

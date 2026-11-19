@@ -6,6 +6,10 @@ const { ENUMS } = require('./store');
 const sessions = require('./sessions');
 const settings = require('./settings');
 const screen = require('./screen');
+const agents = require('./agents');
+const mind = require('./mind');
+const brief = require('./brief');
+const skills = require('./skills');
 const VERSION = require('../package.json').version;
 
 const PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
@@ -17,7 +21,11 @@ Use it like this:
 3. Save durable knowledge (decisions, user preferences, facts, how-tos, summaries of finished work) with memory_write. Link related notes with [[Note Title]] wikilinks.
 4. Track work with tasks: task_create, then task_update status todo -> doing -> done (or blocked).
 5. Log meaningful actions with activity_log so the human can follow along in the dashboard.
-6. While working on a longer task, call live_update with your current step (the user watches this live from their phone). Read and follow any messages_from_user it returns. Use live_screenshot to show the user your screen or a screenshot file of what you are building.
+6. If the user gave you instructions for a project (cortex_start returns them, or project_brief), follow them. Work from what is already recorded in Cortex and write back what you learn.
+7. The user can send you commands from Cortex (even from their phone). They arrive as commands_from_user in cortex_start, live_update and messages_check results: do them, then call command_complete with the outcome.
+8. The user keeps skills in Cortex: call skill_list and skill_get for any skill that fits the task, and follow it.
+8b. The Mind tab holds videos to watch, articles to read and articles to write. Use mind_list / mind_fetch / mind_complete to work through it, and mind_add to save links worth keeping.
+9. While working on a longer task, call live_update with your current step (the user watches this live from their phone). Read and follow any messages_from_user it returns. Use live_screenshot to show the user your screen or a screenshot file of what you are building.
 IDs look like "notes/my-note", "tasks/fix-login", "projects/website". Titles also work wherever an id is expected.`;
 
 const str = (description, extra = {}) => ({ type: 'string', description, ...extra });
@@ -44,17 +52,23 @@ function buildTools(store) {
       name: 'cortex_start',
       description: 'Load working context: active projects, open tasks, pinned and recent memories, and recent agent activity. Call this first in every session.',
       inputSchema: { type: 'object', properties: { project: str('Optional project slug or title to focus on') } },
-      run: (a) => {
+      run: (a, ctx) => {
         const project = a.project ? store.resolveProject(a.project) : undefined;
         const f = project ? { project } : {};
+        const ins = brief.instructionsFor(store, project);
         return {
           instructions: INSTRUCTIONS,
+          user_instructions: ins.global || undefined,
+          project_instructions: ins.project || undefined,
+          commands_from_user: agents.claimCommands(store.vault, ctx.agent).map(agents.commandView),
+          mind_queue: store.list('mind', { status: ['queued', 'fetched'], limit: 10 }).map((r) => ({ id: r.id, section: r.meta.section, title: r.title, url: r.meta.url, status: r.meta.status })),
           vault: store.vault,
           stats: store.stats(),
           projects: store.list('project', { status: ['active', 'paused'] }).map((r) => projectView(store, r)),
           open_tasks: store.list('task', { ...f, open: true, limit: 40 }).map((r) => taskView(store, r)),
-          pinned_memories: store.list('note', f).filter((r) => r.meta.pinned === true).slice(0, 10).map((r) => noteView(store, r)),
-          recent_memories: store.list('note', { ...f, limit: 12 }).map((r) => noteView(store, r)),
+          ...(project ? { project_memories: store.list('note', { project, limit: 15 }).map((r) => noteView(store, r)) } : {}),
+          system_memories: store.list('note', { scope: 'system' }).filter((r) => r.meta.pinned === true || true).slice(0, 15).map((r) => noteView(store, r)),
+          memory_scopes: project ? `Project memories (notes/${project}/) apply only to this project; system memories (notes/) apply to all projects. Other projects' memories are not loaded.` : 'No project selected: only system memories are loaded. Pass project to load that project\'s memories.',
           recent_activity: store.recentActivity({ project, limit: 15 }),
         };
       },
@@ -80,7 +94,7 @@ function buildTools(store) {
       description: 'Update a project (name, description, status, color, overview).',
       inputSchema: {
         type: 'object', required: ['project'],
-        properties: { project: str('Project id, slug or title'), title: str('New name'), description: str('Description'), body: str('Replace the Markdown overview'), append: str('Append Markdown to the overview'), status: str('Status', { enum: ENUMS.project.status }), color: str('Hex color'), tags: tagsProp },
+        properties: { project: str('Project id, slug or title'), title: str('New name'), description: str('Description'), instructions: str('Standing instructions agents must follow when working on this project'), folder: str('Code folder on this computer for this project'), body: str('Replace the Markdown overview'), append: str('Append Markdown to the overview'), status: str('Status', { enum: ENUMS.project.status }), color: str('Hex color'), tags: tagsProp },
       },
       run: (a, ctx) => {
         const slug = store.resolveProject(a.project);
@@ -160,7 +174,7 @@ function buildTools(store) {
         type: 'object', required: ['title', 'content'],
         properties: {
           title: str('Clear, searchable title'), content: str('Markdown content'), type: str('Kind of memory (default memory)', { enum: ENUMS.note.type }),
-          project: str('Project slug or title'), tags: tagsProp, pinned: { type: 'boolean', description: 'Pin so it is always loaded by cortex_start' },
+          project: str('Project slug or title. With a project the memory is stored in that project\'s folder and only applies to it; without one it is a system memory that applies to every project.'), tags: tagsProp, pinned: { type: 'boolean', description: 'Pin so it is always loaded by cortex_start' },
         },
       },
       run: (a, ctx) => {
@@ -203,13 +217,17 @@ function buildTools(store) {
       inputSchema: {
         type: 'object', required: ['query'],
         properties: {
-          query: str('Search words'), kind: str('Limit to one kind', { enum: ['note', 'task', 'project'] }), type: str('Note type filter'),
-          project: str('Project slug'), tag: str('Tag'), limit: { type: 'number', description: 'Max results (default 10)' },
+          query: str('Search words'), kind: str('Limit to one kind', { enum: ['note', 'task', 'project', 'mind'] }), type: str('Note type filter'),
+          project: str('Project slug: searches that project\'s memories plus system memories'), scope: str('all = every project (default when no project is given)', { enum: ['project', 'all'] }), tag: str('Tag'), limit: { type: 'number', description: 'Max results (default 10)' },
         },
       },
-      run: (a) => {
+      run: async (a) => {
         const project = a.project ? store.resolveProject(a.project) : undefined;
-        return store.search(a.query, { kind: a.kind, type: a.type, project, tag: a.tag, limit: a.limit || 10 })
+        const f = project && a.scope !== 'all' ? { scope: 'project+system', projectScope: project } : {};
+        const opts = { kind: a.kind, type: a.type, tag: a.tag, limit: a.limit || 10, ...f };
+        const st = settings.load(store.vault).search;
+        const hits = st.semantic && fs.existsSync(require('path').join(store.vault, '.cortex', 'embeddings.json')) ? await require('./semantic').hybrid(store, a.query, opts, st.model) : store.search(a.query, opts);
+        return hits
           .map((h) => ({ id: h.rec.id, kind: h.rec.kind, title: h.rec.title, score: h.score, snippet: h.snippet, updated: h.rec.updated }));
       },
     },
@@ -218,11 +236,11 @@ function buildTools(store) {
       description: 'List notes/memories, newest first (pinned first).',
       inputSchema: {
         type: 'object',
-        properties: { type: str('Note type filter'), project: str('Project slug'), tag: str('Tag'), limit: { type: 'number', description: 'Max results (default 30)' } },
+        properties: { type: str('Note type filter'), project: str('Project slug (that project\'s memories only)'), scope: str('system = memories that apply to all projects', { enum: ['system'] }), tag: str('Tag'), limit: { type: 'number', description: 'Max results (default 30)' } },
       },
       run: (a) => {
         const project = a.project ? store.resolveProject(a.project) : undefined;
-        return store.list('note', { type: a.type, project, tag: a.tag, limit: a.limit || 30 }).map((r) => noteView(store, r));
+        return store.list('note', { type: a.type, project, scope: a.scope, tag: a.tag, limit: a.limit || 30 }).map((r) => noteView(store, r));
       },
     },
     {
@@ -280,7 +298,8 @@ function buildTools(store) {
         const text = [a.step, a.detail].filter(Boolean).join(' — ') || (a.status ? `Status: ${a.status}` : '');
         sessions.upsert(store.vault, ctx.sessionId, patch, { kind: a.status && a.status !== 'working' ? 'status' : 'step', text });
         const msgs = sessions.takeMessages(store.vault, ctx.sessionId);
-        return { ok: true, session: ctx.sessionId, messages_from_user: msgs.map((m) => m.text) };
+        const cmds = agents.claimCommands(store.vault, ctx.agent).map(agents.commandView);
+        return { ok: true, session: ctx.sessionId, messages_from_user: msgs.map((m) => m.text), ...(cmds.length ? { commands_from_user: cmds } : {}) };
       },
     },
     {
@@ -313,11 +332,98 @@ function buildTools(store) {
     },
     {
       name: 'messages_check',
-      description: 'Check for messages the user sent you from the Cortex dashboard or their phone.',
+      description: 'Check for messages and commands the user sent you from the Cortex dashboard or their phone.',
       inputSchema: { type: 'object', properties: {} },
       run: (a, ctx) => {
-        if (!sessions.get(store.vault, ctx.sessionId)) return { messages_from_user: [] };
-        return { messages_from_user: sessions.takeMessages(store.vault, ctx.sessionId).map((m) => ({ text: m.text, sent: m.ts })) };
+        const cmds = agents.claimCommands(store.vault, ctx.agent).map(agents.commandView);
+        const msgs = sessions.get(store.vault, ctx.sessionId) ? sessions.takeMessages(store.vault, ctx.sessionId).map((m) => ({ text: m.text, sent: m.ts })) : [];
+        return { messages_from_user: msgs, commands_from_user: cmds };
+      },
+    },
+    {
+      name: 'command_complete',
+      description: 'Report the outcome of a command the user sent you through Cortex (from commands_from_user).',
+      inputSchema: { type: 'object', required: ['id', 'result'], properties: { id: str('Command id, e.g. cmd-ab12cd34ef'), result: str('What you did / the answer'), failed: { type: 'boolean', description: 'true if you could not do it' } } },
+      run: (a, ctx) => {
+        const c = agents.completeCommand(store.vault, a.id, { result: a.result, failed: a.failed }, ctx.agent);
+        store.log({ agent: ctx.agent, action: a.failed ? 'command.failed' : 'command.done', summary: `${a.failed ? 'Could not do' : 'Did'}: ${c.text.slice(0, 120)}`, project: c.project });
+        return { ok: true, id: c.id, status: c.status };
+      },
+    },
+    {
+      name: 'project_brief',
+      description: 'Get the full working brief for a project or task: the user\'s standing instructions, project instructions, overview, open tasks, memories and the rules for working in Cortex. Call this before starting work on a project.',
+      inputSchema: { type: 'object', properties: { project: str('Project slug or title'), task: str('Task id or title') } },
+      run: (a) => brief.buildBrief(store, { project: a.project ? store.resolveProject(a.project) : undefined, task: a.task ? store.must(a.task).id : undefined }).text,
+    },
+    {
+      name: 'daily_briefing',
+      description: 'Summary of what happened recently (agent work, completed tasks, new memories) and what needs the user (approvals, overdue and blocked tasks).',
+      inputSchema: { type: 'object', properties: { hours: { type: 'number', description: 'Look back this many hours (default 24)' } } },
+      run: (a) => require('./insights').briefing(store, Date.now() - (Number(a.hours) || 24) * 3600e3).markdown,
+    },
+    // ---------------- skills ----------------
+    {
+      name: 'skill_list',
+      description: 'List the user\'s skills (reusable instructions for specific kinds of work). Use skill_get to read one that fits your task.',
+      inputSchema: { type: 'object', properties: {} },
+      run: () => store.list('skill').map((r) => ({ name: r.slug, title: r.title, description: r.meta.description || '' })),
+    },
+    {
+      name: 'skill_get',
+      description: 'Read a skill\'s full instructions and follow them.',
+      inputSchema: { type: 'object', required: ['name'], properties: { name: str('Skill name from skill_list') } },
+      run: (a) => { const r = store.get('skills/' + String(a.name).replace(/^skills\//, '')) || store.must(a.name); if (r.kind !== 'skill') throw new Error('Not a skill'); return skills.skillMd(r); },
+    },
+    {
+      name: 'skill_save',
+      description: 'Create or update a skill in the user\'s library (only when the user asks you to save a skill).',
+      inputSchema: { type: 'object', required: ['title', 'description', 'instructions'], properties: { title: str('Skill name'), description: str('When to use it (one or two sentences)'), instructions: str('The skill instructions in Markdown') } },
+      run: (a, ctx) => {
+        const existing = store.list('skill').find((r) => r.title.toLowerCase() === String(a.title).toLowerCase());
+        const r = existing ? store.update(existing.id, { description: a.description, body: a.instructions }) : store.create('skill', { title: a.title, description: a.description, body: a.instructions, author: ctx.agent });
+        store.log({ agent: ctx.agent, action: 'skill.save', summary: `${existing ? 'Updated' : 'Created'} skill "${r.title}"`, ref: r.id });
+        return { name: r.slug, id: r.id };
+      },
+    },
+    // ---------------- mind ----------------
+    {
+      name: 'mind_list',
+      description: 'List Mind items: videos to watch, articles to read, articles to write. Defaults to items still waiting to be processed.',
+      inputSchema: { type: 'object', properties: { section: str('watch, read or write', { enum: ENUMS.mind.section }), status: str('Comma-separated: queued, fetched, processing, done, failed'), all: { type: 'boolean', description: 'Include done items' }, limit: { type: 'number' } } },
+      run: (a) => store.list('mind', { section: a.section, status: a.status || (a.all ? undefined : ['queued', 'fetched', 'processing', 'failed']), limit: a.limit || 30 })
+        .map((r) => ({ id: r.id, section: r.meta.section, title: r.title, url: r.meta.url, status: r.meta.status, notes: r.meta.notes, has_transcript: r.meta.has_transcript, added: r.created })),
+    },
+    {
+      name: 'mind_add',
+      description: 'Add something to the user\'s Mind: a video link (watch), an article link (read), or an article to write (write: give a title/topic and notes). The section is guessed from the link if omitted.',
+      inputSchema: { type: 'object', properties: { url: str('Link to the video or article'), title: str('Title (required for write items)'), section: str('watch, read or write', { enum: ENUMS.mind.section }), notes: str('Why it matters / instructions'), project: str('Project slug'), fetch: { type: 'boolean', description: 'Fetch the transcript / article text right away' } } },
+      run: async (a, ctx) => {
+        const { rec, duplicate } = mind.add(store, { ...a, added_by: ctx.agent });
+        let fetched = null;
+        if (a.fetch && rec.meta.section !== 'write') { try { fetched = await mind.fetchItem(store, rec.id); } catch (e) { fetched = { error: e.message }; } }
+        if (!duplicate) store.log({ agent: ctx.agent, action: 'mind.add', summary: `Added to Mind (${rec.meta.section}): ${rec.title}`, ref: rec.id });
+        return { id: rec.id, section: rec.meta.section, duplicate, ...(fetched ? { fetched: fetched.error ? { error: fetched.error } : { status: fetched.meta.status, title: fetched.title } } : {}) };
+      },
+    },
+    {
+      name: 'mind_fetch',
+      description: '"Watch" a video or read an article: Cortex downloads the video\'s title, channel, description and transcript (or the article\'s text) into the item. Then read it with memory_get and save your summary with mind_complete.',
+      inputSchema: { type: 'object', required: ['id'], properties: { id: str('Mind item id') } },
+      run: async (a, ctx) => {
+        const r = await mind.fetchItem(store, a.id);
+        store.log({ agent: ctx.agent, action: 'mind.fetch', summary: `Fetched "${r.title}"`, ref: r.id });
+        return { id: r.id, title: r.title, status: r.meta.status, has_transcript: r.meta.has_transcript, note: r.meta.fetch_note || undefined, characters: r.body.length, next: 'Read it with memory_get, then call mind_complete with your summary.' };
+      },
+    },
+    {
+      name: 'mind_complete',
+      description: 'Save your summary of a watched video / read article (also saved as a memory note linked to the item), or your draft for a write item. Marks the item done.',
+      inputSchema: { type: 'object', required: ['id'], properties: { id: str('Mind item id'), summary: str('Markdown summary: key points, takeaways, notable quotes with timestamps'), draft: str('For write items: the article draft in Markdown'), save_memory: { type: 'boolean', description: 'Also store the summary as a memory note (default true)' }, tags: tagsProp } },
+      run: (a, ctx) => {
+        const out = mind.complete(store, a.id, { ...a, agent: ctx.agent });
+        store.log({ agent: ctx.agent, action: 'mind.done', summary: `${out.item.meta.section === 'write' ? 'Wrote' : 'Summarised'} "${out.item.title}"`, ref: out.item.id, project: out.item.meta.project });
+        return { id: out.item.id, status: 'done', memory: out.memory ? out.memory.id : undefined };
       },
     },
   ];
@@ -358,6 +464,7 @@ function createMcp(store) {
         const tool = byName.get(params.name);
         if (!tool) return fail(id, -32602, `Unknown tool: ${params.name}`);
         const args = params.arguments || {};
+        store.scan(false); // pick up anything the dashboard, hooks or other agents wrote since the last tick
         if (!session.id) session.id = 'mcp-' + crypto.randomBytes(6).toString('hex');
         const ctx = { agent: session.agent || 'agent', sessionId: session.id, local: session.local !== false };
         try {

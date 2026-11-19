@@ -13,6 +13,15 @@ const settingsMod = require('./settings');
 const screen = require('./screen');
 const updater = require('./updater');
 const claudeHooks = require('./claude-hooks');
+const agents = require('./agents');
+const { AgentRunner } = agents;
+const mind = require('./mind');
+const { Tunnel } = require('./tunnel');
+const skills = require('./skills');
+const insights = require('./insights');
+const templates = require('./templates');
+const backup = require('./backup');
+const semantic = require('./semantic');
 
 const PUB = path.join(__dirname, '..', 'public');
 const MIME = {
@@ -57,13 +66,38 @@ function startServer({ store, port, host, token: cliToken }) {
   const updateState = { checking: false, last: null, info: null, error: null, installing: false };
   const conf = () => settingsMod.load(vault);
   const tokenNow = () => cliToken || conf().remote.token;
+  skills.seed(store);
+  // daily backup + keep the meaning-search index fresh (both optional and best effort)
+  const doBackup = () => { if (conf().backups.daily) { try { backup.daily(vault); } catch { /* disk full etc. */ } } };
+  setTimeout(doBackup, 15000).unref();
+  setInterval(doBackup, 3600e3).unref();
+  let semState = { available: false, reason: 'checking…', indexed: 0 };
+  let semTimer = null;
+  const semIndex = async () => {
+    const s = conf().search;
+    if (!s.semantic) { semState = { available: false, reason: 'turned off' }; return; }
+    semState = { ...(await semantic.status(s.model)), indexed: semState.indexed || 0 };
+    if (semState.available) { try { await semantic.index(store, s.model); semState.indexed = Object.keys(JSON.parse(fs.readFileSync(path.join(vault, '.cortex', 'embeddings.json'), 'utf8')).items).length; } catch (e) { semState.reason = e.message; } }
+  };
+  setTimeout(semIndex, 5000).unref();
+  store.on('change', () => { clearTimeout(semTimer); semTimer = setTimeout(semIndex, 15000); semTimer.unref(); });
+  const runner = new AgentRunner(store);
+  const tunnel = new Tunnel(port);
+  if (conf().connector.tunnel) setTimeout(() => tunnel.start().then(() => broadcast({ type: 'tunnel' })), 1500).unref();
+  // runs that were going when Cortex last stopped can't be tracked any more
+  for (const s of sessions.list(vault)) if (s.launched && s.status === 'working') sessions.upsert(vault, s.id, { status: 'error', step: 'Cortex restarted while this run was going; it may still be running in the background' });
   const broadcast = (ev) => { const data = `data: ${JSON.stringify(ev)}\n\n`; for (const res of sse) res.write(data); };
 
   store.on('change', broadcast);
   setInterval(() => { for (const res of sse) res.write(': ping\n\n'); }, 25000).unref();
   // watch live sessions written by other processes (stdio MCP servers, Claude Code hooks)
   let liveStamp = sessions.dirStamp(vault);
-  setInterval(() => { const s = sessions.dirStamp(vault); if (s !== liveStamp) { liveStamp = s; broadcast({ type: 'live' }); } }, 700).unref();
+  const cmdStamp = () => { try { return fs.statSync(path.join(vault, '.cortex', 'commands')).mtimeMs; } catch { return 0; } };
+  let lastCmd = cmdStamp();
+  setInterval(() => {
+    const s = sessions.dirStamp(vault); if (s !== liveStamp) { liveStamp = s; broadcast({ type: 'live' }); }
+    const c = cmdStamp(); if (c !== lastCmd) { lastCmd = c; broadcast({ type: 'commands' }); }
+  }, 700).unref();
 
   // A request is "local" only if it comes from this computer directly (not through a tunnel/proxy).
   const isLocal = (req) => {
@@ -80,16 +114,16 @@ function startServer({ store, port, host, token: cliToken }) {
     try { const o = new URL(origin); return o.host === req.headers.host || LOCAL_HOSTS.has(o.hostname); } catch { return false; }
   };
   const cookieToken = (req) => { const m = String(req.headers.cookie || '').match(/(?:^|;\s*)cortex_token=([^;]+)/); return m ? decodeURIComponent(m[1]) : ''; };
-  const tokenOk = (given) => {
-    const t = tokenNow();
+  const tokenOk = (given, t = tokenNow()) => {
     if (!t || !given) return false;
     const a = Buffer.from(String(given));
     const b = Buffer.from(t);
     return a.length === b.length && crypto.timingSafeEqual(a, b);
   };
-  const authorized = (req, u) => {
+  const authorized = (req, u, allowConnector = false) => {
     if (isLocal(req)) return true;
     const h = req.headers.authorization || '';
+    if (allowConnector && h.startsWith('Bearer ') && tokenOk(h.slice(7), conf().connector.token)) return true;
     return tokenOk(h.startsWith('Bearer ') ? h.slice(7) : '') || tokenOk(u.searchParams.get('token')) || tokenOk(cookieToken(req));
   };
   const requestRestart = () => {
@@ -132,7 +166,7 @@ function startServer({ store, port, host, token: cliToken }) {
   setInterval(autoUpdate, Math.max(1, Number(conf().updates.checkHours) || 6) * 3600e3).unref();
 
   // ---------- MCP ----------
-  async function handleMcp(req, res) {
+  async function handleMcp(req, res, connector = false) {
     if (req.method === 'GET') return send(res, 405, { error: 'Use POST for MCP requests' }, { Allow: 'POST, DELETE' });
     if (req.method === 'DELETE') { mcpSessions.delete(req.headers['mcp-session-id']); return send(res, 200, {}); }
     if (req.method !== 'POST') return send(res, 405, { error: 'Method not allowed' }, { Allow: 'POST, DELETE' });
@@ -144,7 +178,7 @@ function startServer({ store, port, host, token: cliToken }) {
     const headers = {};
     if (isInit) {
       sid = crypto.randomUUID();
-      mcpSessions.set(sid, { transport: 'http', id: 'mcp-' + sid.slice(0, 12), local: isLocal(req), created: Date.now() });
+      mcpSessions.set(sid, { transport: connector ? 'connector' : 'http', id: 'mcp-' + sid.slice(0, 12), local: !connector && isLocal(req), created: Date.now() });
       headers['Mcp-Session-Id'] = sid;
     }
     let session = sid && mcpSessions.get(sid);
@@ -173,6 +207,7 @@ function startServer({ store, port, host, token: cliToken }) {
         projects: store.list('project').map((r) => ({ ...store.toJSON(r), progress: store.projectStats(r.slug) })),
         tasks: store.list('task').map((r) => store.toJSON(r)),
         notes: store.list('note').map((r) => store.toJSON(r, { body: false })),
+        mind: store.list('mind').map((r) => store.toJSON(r, { body: false })),
         activity: store.recentActivity({ limit: 200 }),
         liveCount: sessions.list(vault).filter((s) => ['working', 'needs-you'].includes(s.status)).length,
         update: updateState.info && updateState.info.available ? { latest: updateState.info.latest } : null,
@@ -205,9 +240,58 @@ function startServer({ store, port, host, token: cliToken }) {
       return send(res, 200, { deleted: r.id });
     }
     if (p === '/api/search' && m === 'GET') {
-      return send(res, 200, store.search(u.searchParams.get('q') || '', { kind: u.searchParams.get('kind') || undefined, limit: 30 })
-        .map((h) => ({ id: h.rec.id, kind: h.rec.kind, title: h.rec.title, snippet: h.snippet, score: h.score })));
+      const q = u.searchParams.get('q') || '';
+      const f = { kind: u.searchParams.get('kind') || undefined, limit: 30 };
+      const hits = semState.available ? await semantic.hybrid(store, q, f, conf().search.model) : store.search(q, f);
+      return send(res, 200, hits.map((h) => ({ id: h.rec.id, kind: h.rec.kind, title: h.rec.title, snippet: h.snippet, score: h.score, semantic: !!h.semantic })));
     }
+    // ---- insights, templates, history, backups ----
+    if (p === '/api/health' && m === 'GET') return send(res, 200, insights.health(store));
+    if (p === '/api/garden' && m === 'GET') return send(res, 200, insights.garden(store));
+    if (p === '/api/garden/run' && m === 'POST') {
+      const b = await json();
+      const report = insights.garden(store);
+      const text = `${insights.GARDEN_PROMPT}\n\nGardener report (JSON):\n${JSON.stringify(report).slice(0, 12000)}`;
+      if (b.via === 'launch') {
+        const s = conf().agents;
+        if (!s.enabled || !s.folders[0]) return send(res, 403, { error: 'Turn on Settings → Agent control and add a folder to launch agents.' });
+        return send(res, 201, runner.launch({ tool: 'claude', prompt: text, cwd: s.folders[0], permission: 'default', maxMinutes: 30, from: agent }));
+      }
+      return send(res, 201, { command: agents.createCommand(vault, { text, target: 'any', from: agent }) });
+    }
+    if (p === '/api/briefing' && m === 'GET') {
+      const hours = Math.min(24 * 14, Math.max(1, Number(u.searchParams.get('hours')) || 24));
+      return send(res, 200, insights.briefing(store, Date.now() - hours * 3600e3));
+    }
+    if (p === '/api/briefing/save' && m === 'POST') {
+      const b = insights.briefing(store);
+      const r = store.create('note', { title: `Daily briefing ${new Date().toISOString().slice(0, 10)}`, type: 'log', body: b.markdown, tags: ['briefing'] });
+      return send(res, 201, { id: r.id });
+    }
+    if (p === '/api/templates' && m === 'GET') return send(res, 200, templates.TEMPLATES.map(({ id, name, description, color, instructions, tasks, notes }) => ({ id, name, description, color, instructions, tasks: tasks.length, notes: notes.length })));
+    if (p === '/api/templates' && m === 'POST') {
+      const b = await json();
+      const pr = templates.createFromTemplate(store, b.template, { title: b.title, description: b.description, folder: b.folder });
+      store.log({ agent, action: 'project.create', summary: `Created project "${pr.title}" from the ${b.template} template`, project: pr.slug });
+      return send(res, 201, store.toJSON(pr));
+    }
+    if (p === '/api/history' && m === 'GET') {
+      const id = u.searchParams.get('id') || '';
+      const v = u.searchParams.get('version');
+      if (v) return send(res, 200, { text: backup.readVersion(vault, id, v) });
+      return send(res, 200, backup.versions(vault, id));
+    }
+    if (p === '/api/history/restore' && m === 'POST') {
+      const b = await json();
+      const text = backup.readVersion(vault, b.id, b.version);
+      const { parse } = require('./frontmatter');
+      const { meta, body } = parse(text);
+      const r = store.update(b.id, { ...meta, body, quiet: true });
+      store.log({ agent, action: 'restore', summary: `Restored an earlier version of "${r.title}"`, ref: r.id });
+      return send(res, 200, store.toJSON(r));
+    }
+    if (p === '/api/backups' && m === 'GET') return send(res, 200, { backups: backup.listBackups(vault), daily: conf().backups.daily, semantic: { ...semState, model: conf().search.model, enabled: conf().search.semantic } });
+    if (p === '/api/backups' && m === 'POST') { if (!localOnly()) return; return send(res, 201, backup.backupNow(vault)); }
     if (p === '/api/graph' && m === 'GET') return send(res, 200, store.graph());
     if (p === '/api/activity' && m === 'GET') return send(res, 200, store.recentActivity({ agent: u.searchParams.get('agent') || undefined, limit: Number(u.searchParams.get('limit')) || 200 }));
     if (p === '/api/activity' && m === 'POST') { const b = await json(); return send(res, 201, store.log({ ...b, agent: b.agent || agent })); }
@@ -215,7 +299,22 @@ function startServer({ store, port, host, token: cliToken }) {
 
     // ---- live agent sessions ----
     if (p === '/api/live' && m === 'GET') {
-      return send(res, 200, { sessions: sessions.list(vault).map((s) => ({ ...s, events: s.events.slice(-25) })), screenEnabled: conf().screen.enabled });
+      const apDir = path.join(vault, '.cortex', 'approvals');
+      let approvals = [];
+      try { approvals = fs.readdirSync(apDir).filter((f) => f.endsWith('.json')).map((f) => { try { return JSON.parse(fs.readFileSync(path.join(apDir, f), 'utf8')); } catch { return null; } }).filter((a) => a && a.status === 'pending' && Date.now() - new Date(a.ts).getTime() < 150000); } catch { /* none */ }
+      return send(res, 200, { sessions: sessions.list(vault).map((s) => ({ ...s, events: s.events.slice(-25) })), screenEnabled: conf().screen.enabled, approvals });
+    }
+    if (p === '/api/approvals' && m === 'POST') {
+      const b = await json();
+      const f = path.join(vault, '.cortex', 'approvals', String(b.id || '').replace(/[^\w-]/g, '') + '.json');
+      let cur;
+      try { cur = JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return send(res, 404, { error: 'That request is gone (it may have timed out)' }); }
+      if (cur.status !== 'pending') return send(res, 409, { error: `Already ${cur.status}` });
+      if (!['allow', 'deny'].includes(b.decision)) return send(res, 400, { error: 'decision must be allow or deny' });
+      fs.writeFileSync(f, JSON.stringify({ ...cur, status: b.decision, note: b.note ? String(b.note).slice(0, 500) : undefined, decidedBy: agent, decidedAt: new Date().toISOString() }));
+      store.log({ agent, action: b.decision === 'allow' ? 'approval.allow' : 'approval.deny', summary: `${b.decision === 'allow' ? 'Approved' : 'Denied'}: ${cur.summary}` });
+      broadcast({ type: 'live' });
+      return send(res, 200, { ok: true });
     }
     if (p === '/api/live' && m === 'DELETE') { sessions.remove(vault, u.searchParams.get('id')); broadcast({ type: 'live' }); return send(res, 200, { ok: true }); }
     if (p === '/api/live/message' && m === 'POST') {
@@ -245,6 +344,119 @@ function startServer({ store, port, host, token: cliToken }) {
       return res.end(buf);
     }
 
+    // ---- organize agent sessions (chats) ----
+    if (p === '/api/live' && m === 'PATCH') {
+      const b = await json();
+      if (!sessions.get(vault, b.id)) return send(res, 404, { error: 'Session not found' });
+      const patch = {};
+      for (const k of ['title', 'pinned', 'archived', 'notes']) if (b[k] !== undefined) patch[k] = b[k];
+      if (b.project !== undefined) patch.project = b.project ? store.resolveProject(b.project) : null;
+      if (b.tags !== undefined) patch.tags = String(b.tags).split(',').map((x) => x.trim()).filter(Boolean);
+      sessions.upsert(vault, b.id, patch);
+      broadcast({ type: 'live' });
+      return send(res, 200, { ok: true });
+    }
+
+    // ---- skills ----
+    if (p === '/api/skills' && m === 'GET') {
+      return send(res, 200, store.list('skill').map((r) => ({ ...store.toJSON(r), installed: local ? skills.status(r) : undefined })));
+    }
+    if (p === '/api/skills/install' && m === 'POST') {
+      if (!localOnly()) return;
+      const b = await json();
+      const r = store.must(b.id);
+      const out = b.action === 'uninstall' ? skills.uninstall(r, b.target) : skills.install(r, b.target);
+      store.log({ agent, action: 'skill.' + (b.action || 'install'), summary: `${b.action === 'uninstall' ? 'Removed' : 'Installed'} skill "${r.title}" ${b.action === 'uninstall' ? 'from' : 'to'} ${skills.TARGETS[b.target].label}`, ref: r.id });
+      return send(res, 200, out);
+    }
+    if (p === '/api/skills/import' && m === 'POST') { if (!localOnly()) return; const b = await json(); return send(res, 200, skills.importFrom(store, b.target)); }
+    if (p === '/api/skills/zip' && m === 'GET') {
+      const r = store.must(u.searchParams.get('id') || '');
+      const buf = skills.skillZip(r);
+      res.writeHead(200, { 'Content-Type': 'application/zip', 'Content-Disposition': `attachment; filename="${r.slug}.zip"`, 'Content-Length': buf.length });
+      return res.end(buf);
+    }
+    if (p === '/api/skills/chatgpt' && m === 'GET') return send(res, 200, { text: skills.chatgptText(store.must(u.searchParams.get('id') || '')) });
+
+    // ---- mind ----
+    if (p === '/api/mind' && m === 'POST') {
+      const b = await json();
+      const { rec, duplicate } = mind.add(store, { url: b.url, title: b.title, section: b.section, notes: b.notes, project: b.project || undefined, added_by: agent });
+      if (!duplicate) store.log({ agent, action: 'mind.add', summary: `Added to Mind (${rec.meta.section}): ${rec.title}`, ref: rec.id });
+      if (b.fetch && rec.meta.section !== 'write' && !duplicate) mind.fetchItem(store, rec.id).catch(() => {});
+      return send(res, 201, { ...store.toJSON(rec, { body: false }), duplicate });
+    }
+    if (p === '/api/mind/fetch' && m === 'POST') {
+      const b = await json();
+      const r = await mind.fetchItem(store, b.id);
+      return send(res, 200, store.toJSON(r, { body: false }));
+    }
+    if (p === '/api/mind/process' && m === 'POST') {
+      const b = await json();
+      const item = store.must(b.id);
+      const ask = item.meta.section === 'write'
+        ? `Write the article "${item.title}" for Mind item ${item.id}. Instructions: ${item.meta.notes || 'none given'}. Use project_brief/memory_search for context, then save the draft with mind_complete (draft).`
+        : `Process Mind item ${item.id} ("${item.title}"): call mind_fetch if it is not fetched yet, read it with memory_get, then save a clear summary (key points, takeaways, notable quotes with timestamps) with mind_complete.`;
+      const s = conf().agents;
+      if (b.via === 'launch') {
+        if (!s.enabled) return send(res, 403, { error: 'Starting agents is turned off. Enable it in Settings → Agent control on your computer.' });
+        const folder = s.folders[0];
+        if (!folder) return send(res, 400, { error: 'Add at least one allowed folder in Settings → Agent control.' });
+        store.update(item.id, { status: 'processing' });
+        return send(res, 201, runner.launch({ tool: b.tool || 'claude', prompt: ask, cwd: folder, permission: 'default', maxMinutes: 30, project: item.meta.project, from: agent }));
+      }
+      const c = agents.createCommand(vault, { text: ask, target: b.target || 'any', project: item.meta.project, from: agent });
+      return send(res, 201, { command: c });
+    }
+
+    // ---- agent control ----
+    if (p === '/api/agents' && m === 'GET') {
+      const s = conf().agents;
+      return send(res, 200, { enabled: s.enabled, folders: s.folders, permission: s.permission, available: await runner.available(), running: runner.running(), commands: agents.listCommands(vault, { limit: 60 }) });
+    }
+    if (p === '/api/agents/run' && m === 'POST') {
+      const s = conf().agents;
+      if (!s.enabled) return send(res, 403, { error: 'Starting agents is turned off. Enable it in Settings → Agent control on your computer.' });
+      const b = await json();
+      let cwd = b.folder;
+      const proj = b.project ? store.get('projects/' + store.resolveProject(b.project)) : null;
+      if (!cwd && proj && proj.meta.folder) cwd = proj.meta.folder;
+      if (!cwd && b.resumeFrom) cwd = (sessions.get(vault, b.resumeFrom) || {}).cwd;
+      if (!cwd) cwd = s.folders[0];
+      if (!agents.folderAllowed(cwd, s.folders)) return send(res, 403, { error: `That folder is not in your allowed folders (Settings → Agent control): ${cwd || 'none'}` });
+      let resume;
+      let project = proj ? proj.slug : undefined;
+      let task = b.task || undefined;
+      if (b.resumeFrom) {
+        const prev = sessions.get(vault, b.resumeFrom);
+        if (!prev || !prev.claude_session) return send(res, 400, { error: 'This chat cannot be continued (it was not started by Cortex with Claude Code).' });
+        resume = prev.claude_session; project = project || prev.project; task = task || prev.task;
+      }
+      const r = runner.launch({ tool: b.tool || 'claude', prompt: b.prompt, cwd, permission: s.permission, maxMinutes: s.maxMinutes, project, task, resume, continues: b.resumeFrom, from: agent });
+      store.log({ agent, action: 'agent.start', summary: `Started ${b.tool === 'codex' ? 'Codex' : 'Claude Code'}: ${String(b.prompt || task || '').slice(0, 120)}`, project, ref: task });
+      broadcast({ type: 'live' });
+      return send(res, 201, r);
+    }
+    if (p === '/api/agents/stop' && m === 'POST') { const b = await json(); return send(res, 200, { stopped: runner.stop(b.id) }); }
+    if (p === '/api/commands' && m === 'POST') {
+      const b = await json();
+      const c = agents.createCommand(vault, { text: b.text, target: b.target, project: b.project ? store.resolveProject(b.project) : undefined, from: agent });
+      store.log({ agent, action: 'command.sent', summary: `Command for ${c.target === 'any' ? 'any agent' : c.target}: ${c.text.slice(0, 120)}`, project: c.project });
+      return send(res, 201, c);
+    }
+    if (p === '/api/commands' && m === 'DELETE') { agents.deleteCommand(vault, u.searchParams.get('id')); store.emit('change', { type: 'commands' }); return send(res, 200, { ok: true }); }
+    if (p === '/api/brief' && m === 'GET') {
+      return send(res, 200, { text: require('./brief').buildBrief(store, { project: u.searchParams.get('project') || undefined, task: u.searchParams.get('task') || undefined, assignment: u.searchParams.get('assignment') || '' }).text });
+    }
+    if (p === '/api/tunnel' && m === 'POST') {
+      if (!localOnly()) return;
+      const b = await json();
+      settingsMod.update(vault, { connector: { tunnel: b.action === 'start' } });
+      const st = b.action === 'start' ? await tunnel.start() : tunnel.stop();
+      broadcast({ type: 'tunnel' });
+      return send(res, st.error && b.action === 'start' ? 400 : 200, st);
+    }
+
     // ---- settings: phone access, screen sharing, updates ----
     if (p === '/api/settings' && m === 'GET') {
       const s = conf();
@@ -252,9 +464,11 @@ function startServer({ store, port, host, token: cliToken }) {
         local,
         updates: s.updates,
         screen: s.screen,
-        remote: { enabled: s.remote.enabled, listening: host, ...(local ? { token: tokenNow(), addresses: lanAddresses(port) } : {}) },
+        remote: { enabled: s.remote.enabled, listening: host, ...(local ? { token: tokenNow(), addresses: [...lanAddresses(port), ...(tunnel.url ? [{ ip: new URL(tunnel.url).host, kind: 'public', url: tunnel.url }] : [])] } : {}) },
         supervised: !!process.env.CORTEX_SUPERVISED,
         claudeHooks: local ? claudeHooks.status() : undefined,
+        agents: { enabled: s.agents.enabled, folders: s.agents.folders, permission: s.agents.permission, maxMinutes: s.agents.maxMinutes, instructions: s.agents.instructions || '', saveGate: s.agents.saveGate !== false, phoneApprovals: !!s.agents.phoneApprovals },
+        connector: local ? { token: s.connector.token, tunnel: tunnel.status(), cloudflared: await tunnel.available(), localUrl: `http://127.0.0.1:${port}/mcp/${s.connector.token}` } : undefined,
       });
     }
     if (p === '/api/settings' && m === 'POST') {
@@ -266,6 +480,23 @@ function startServer({ store, port, host, token: cliToken }) {
       if (b.screen) patch.screen = { enabled: !!b.screen.enabled };
       if (b.remote && b.remote.enabled !== undefined) patch.remote = { enabled: !!b.remote.enabled };
       if (b.rotateToken) patch.remote = { ...(patch.remote || {}), token: settingsMod.newToken() };
+      if (b.rotateConnector) patch.connector = { token: settingsMod.newToken() };
+      if (b.agents) {
+        const a = b.agents;
+        patch.agents = {};
+        if (a.enabled !== undefined) patch.agents.enabled = !!a.enabled;
+        if (a.permission !== undefined) { if (!['default', 'acceptEdits', 'bypassPermissions'].includes(a.permission)) return send(res, 400, { error: 'Invalid permission mode' }); patch.agents.permission = a.permission; }
+        if (a.maxMinutes !== undefined) patch.agents.maxMinutes = Math.max(5, Math.min(600, Number(a.maxMinutes) || 120));
+        if (a.instructions !== undefined) patch.agents.instructions = String(a.instructions).slice(0, 20000);
+        if (a.saveGate !== undefined) patch.agents.saveGate = !!a.saveGate;
+        if (a.phoneApprovals !== undefined) patch.agents.phoneApprovals = !!a.phoneApprovals;
+        if (a.folders !== undefined) {
+          const list = (Array.isArray(a.folders) ? a.folders : String(a.folders).split('\n')).map((x) => String(x).trim()).filter(Boolean);
+          for (const f of list) if (!fs.existsSync(f) || !fs.statSync(f).isDirectory()) return send(res, 400, { error: `Folder not found: ${f}` });
+          patch.agents.folders = list.map((f) => path.resolve(f));
+        }
+        if (a.enabled !== undefined) store.log({ agent: 'you', action: 'settings', summary: `Starting agents from Cortex ${a.enabled ? 'enabled' : 'disabled'}` });
+      }
       const s = settingsMod.update(vault, patch);
       if (patch.screen && patch.screen.enabled !== before.screen.enabled) store.log({ agent: 'you', action: 'settings', summary: `Screen sharing ${s.screen.enabled ? 'enabled' : 'disabled'}` });
       let restarting = false;
@@ -330,8 +561,12 @@ function startServer({ store, port, host, token: cliToken }) {
     const u = new URL(req.url, 'http://localhost');
     try {
       if (!isAllowedOrigin(req)) return send(res, 403, { error: 'Forbidden origin' });
+      if (u.pathname.startsWith('/mcp/')) {
+        if (!tokenOk(decodeURIComponent(u.pathname.slice(5)), conf().connector.token)) return send(res, 401, { error: 'Unknown connector link' });
+        return await handleMcp(req, res, true);
+      }
       if (u.pathname === '/mcp') {
-        if (!authorized(req, u)) return send(res, 401, { error: 'Unauthorized' }, { 'WWW-Authenticate': 'Bearer' });
+        if (!authorized(req, u, true)) return send(res, 401, { error: 'Unauthorized' }, { 'WWW-Authenticate': 'Bearer' });
         return await handleMcp(req, res);
       }
       if (u.pathname.startsWith('/api/')) {

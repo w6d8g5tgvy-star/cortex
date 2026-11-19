@@ -6,11 +6,12 @@ const path = require('path');
 const EventEmitter = require('events');
 const { parse, stringify } = require('./frontmatter');
 
-const DIRS = { project: 'projects', task: 'tasks', note: 'notes' };
+const DIRS = { project: 'projects', task: 'tasks', note: 'notes', mind: 'mind', skill: 'skills' };
 const ENUMS = {
   task: { status: ['todo', 'doing', 'blocked', 'done'], priority: ['low', 'medium', 'high', 'urgent'] },
   project: { status: ['active', 'paused', 'done', 'archived'] },
   note: { type: ['note', 'memory', 'decision', 'plan', 'log', 'reference', 'idea'] },
+  mind: { section: ['watch', 'read', 'write'], status: ['queued', 'fetched', 'processing', 'done', 'failed'] },
 };
 const SKIP = new Set(['id', 'kind', 'slug', 'title', 'body', 'append', 'links', 'backlinks', 'created', 'updated', 'allTags', 'excerpt', 'path', 'broken']);
 const STATUS_ORDER = { doing: 0, blocked: 1, todo: 2, done: 3 };
@@ -26,6 +27,13 @@ const asArray = (v) => {
   if (Array.isArray(v)) return v.map((x) => String(x).trim().replace(/^#/, '')).filter(Boolean);
   return String(v).split(',').map((s) => s.trim().replace(/^#/, '')).filter(Boolean);
 };
+const STOP = new Set('the and for are but not you all any can had her was one our out has have him his how its may new now old see two who did get let say she too use with that this from they will what when your were been than them then into more some such only also just over very about would there their which could other after those these where while'.split(' '));
+function stem(w) {
+  if (w.length <= 4) return w;
+  return w.replace(/(ational|ization|fulness|ousness|iveness)$/, (m) => ({ ational: 'ate', ization: 'ize', fulness: 'ful', ousness: 'ous', iveness: 'ive' }[m]))
+    .replace(/(ments?|ings?|edly|ed|ly|ers?|ies|es|s)$/, (m) => (m === 'ies' ? 'y' : '')).replace(/(.)\1$/, '$1');
+}
+function tokenize(s) { return String(s || '').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').split(/[^a-z0-9]+/).filter((w) => w.length > 1 && !STOP.has(w)).map(stem); }
 const WIKI = /\[\[([^\]|#\n]+)(?:#[^\]|\n]*)?(?:\|[^\]\n]*)?\]\]/g;
 const HASHTAG = /(^|\s)#([a-zA-Z][\w\-/]*)/g;
 
@@ -38,10 +46,11 @@ class Store extends EventEmitter {
     this.activity = [];
     this.actFile = path.join(this.vault, '.cortex', 'activity.jsonl');
     this.actSize = 0;
-    for (const d of ['projects', 'tasks', 'notes', '.cortex/trash']) fs.mkdirSync(path.join(this.vault, d), { recursive: true });
+    for (const d of ['projects', 'tasks', 'notes', 'mind', 'skills', '.cortex/trash']) fs.mkdirSync(path.join(this.vault, d), { recursive: true });
     this.scan(true);
     this.loadActivity(true);
     if (this.items.size === 0 && !fs.existsSync(path.join(this.vault, '.cortex', 'seeded'))) this.seed();
+    this.organizeMemories();
     this.timer = setInterval(() => { this.scan(false); this.loadActivity(false); }, 2000);
     this.timer.unref();
   }
@@ -60,7 +69,7 @@ class Store extends EventEmitter {
 
   kindOf(id) {
     const top = id.split('/')[0];
-    return top === 'projects' ? 'project' : top === 'tasks' ? 'task' : 'note';
+    return top === 'projects' ? 'project' : top === 'tasks' ? 'task' : top === 'mind' ? 'mind' : top === 'skills' ? 'skill' : 'note';
   }
 
   fileOf(id) { return path.join(this.vault, ...id.split('/')) + '.md'; }
@@ -80,6 +89,10 @@ class Store extends EventEmitter {
       try {
         const { meta, body } = parse(fs.readFileSync(f, 'utf8'));
         const rec = { id, kind: this.kindOf(id), slug: path.basename(id), meta, body, mtime: st.mtimeMs, ctime: st.birthtimeMs || st.mtimeMs };
+        if (rec.kind === 'note' && !meta.project) {
+          const m = id.match(/^notes\/([^/]+)\/[^/]+$/);
+          if (m && fs.existsSync(this.fileOf('projects/' + m[1]))) meta.project = m[1]; // a file dropped into a project folder belongs to it
+        }
         this.index(rec);
         this.items.set(id, rec);
         changed = true;
@@ -188,6 +201,7 @@ class Store extends EventEmitter {
   write(rec) {
     const file = this.fileOf(rec.id);
     fs.mkdirSync(path.dirname(file), { recursive: true });
+    require('./backup').snapshot(this.vault, rec.id, file); // keep the previous version
     fs.writeFileSync(file, stringify(rec.meta, rec.body));
     const st = fs.statSync(file);
     rec.mtime = st.mtimeMs;
@@ -217,7 +231,8 @@ class Store extends EventEmitter {
   }
 
   must(ref) {
-    const r = this.get(ref);
+    let r = this.get(ref);
+    if (!r) { this.scan(false); r = this.get(ref); } // another process (an agent's MCP server, a hook) may have just written it
     if (!r) throw new Error(`Not found: "${ref}"`);
     return r;
   }
@@ -226,21 +241,66 @@ class Store extends EventEmitter {
     if (!DIRS[kind]) throw new Error(`Unknown kind "${kind}"`);
     const title = String(data.title || '').trim();
     if (!title) throw new Error('title is required');
-    const base = slugify(title) || kind;
-    let slug = base;
-    let n = 2;
-    while (this.items.has(`${DIRS[kind]}/${slug}`) || fs.existsSync(this.fileOf(`${DIRS[kind]}/${slug}`))) slug = `${base}-${n++}`;
-    const id = `${DIRS[kind]}/${slug}`;
-    const defaults = kind === 'task' ? { status: 'todo', priority: 'medium' } : kind === 'project' ? { status: 'active' } : { type: 'note' };
+    const cleaned = this.clean(kind, data);
+    const dir = this.dirFor(kind, cleaned.project);
+    const slug = this.freeSlug(dir, slugify(title) || kind);
+    const id = `${dir}/${slug}`;
+    const defaults = kind === 'task' ? { status: 'todo', priority: 'medium' } : kind === 'project' ? { status: 'active' } : kind === 'mind' ? { section: 'watch', status: 'queued' } : kind === 'skill' ? {} : { type: 'note' };
     const meta = { title, ...defaults };
-    for (const [k, v] of Object.entries(this.clean(kind, data))) if (v !== undefined) meta[k] = v;
+    for (const [k, v] of Object.entries(cleaned)) if (v !== undefined) meta[k] = v;
     if (kind === 'task' && meta.status === 'done') meta.completed = now();
     meta.created = meta.updated = now();
     const rec = { id, kind, slug, meta, body: data.body ? String(data.body) : '', ctime: Date.now() };
     this.write(rec);
+    if (kind === 'project') fs.mkdirSync(path.join(this.vault, 'notes', slug), { recursive: true }); // the project's own memory folder
     this.emit('change', { type: 'create', id, kind });
     return rec;
   }
+
+  // ---------- memory scopes ----------
+  // Project memories live in notes/<project>/ and only apply to that project.
+  // System memories live directly in notes/ and apply to every project.
+  dirFor(kind, project) { return kind === 'note' && project ? `notes/${project}` : DIRS[kind]; }
+
+  freeSlug(dir, base) {
+    let slug = base;
+    let n = 2;
+    while (this.items.has(`${dir}/${slug}`) || fs.existsSync(this.fileOf(`${dir}/${slug}`))) slug = `${base}-${n++}`;
+    return slug;
+  }
+
+  /** Move a note's file into the folder that matches its scope. Returns the (possibly new) record. */
+  relocate(rec) {
+    if (rec.kind !== 'note') return rec;
+    const want = this.dirFor('note', rec.meta.project && this.items.has('projects/' + rec.meta.project) ? rec.meta.project : undefined);
+    const curDir = rec.id.split('/').slice(0, -1).join('/');
+    if (curDir === want) return rec;
+    // notes in other sub-folders that aren't project folders (e.g. your own Obsidian folders) stay where they are
+    if (curDir !== 'notes' && !/^notes\/[^/]+$/.test(curDir)) return rec;
+    if (curDir !== 'notes' && !this.items.has('projects/' + curDir.split('/')[1]) && !rec.meta.project) return rec;
+    const slug = this.freeSlug(want, rec.slug);
+    const newId = `${want}/${slug}`;
+    fs.mkdirSync(path.dirname(this.fileOf(newId)), { recursive: true });
+    fs.renameSync(this.fileOf(rec.id), this.fileOf(newId));
+    this.items.delete(rec.id);
+    const moved = { ...rec, id: newId, slug };
+    moved.mtime = fs.statSync(this.fileOf(newId)).mtimeMs;
+    this.items.set(newId, moved);
+    this.relink();
+    this.emit('change', { type: 'move', id: newId, from: rec.id, kind: 'note' });
+    return moved;
+  }
+
+  /** One-time tidy: put project notes into their project folders and make sure every project has one. */
+  organizeMemories() {
+    for (const p of this.list('project')) fs.mkdirSync(path.join(this.vault, 'notes', p.slug), { recursive: true });
+    for (const r of [...this.items.values()]) {
+      if (r.kind !== 'note') continue;
+      try { this.relocate(r); } catch { /* leave it */ }
+    }
+  }
+
+  scopeOf(rec) { return rec.kind === 'note' && rec.meta.project ? 'project' : 'system'; }
 
   update(ref, patch = {}) {
     const rec = this.must(ref);
@@ -265,8 +325,9 @@ class Store extends EventEmitter {
     const { created, updated, ...rest } = rec.meta;
     rec.meta = { ...rest, created: created || rec.created, updated: now() };
     this.write(rec);
-    this.emit('change', { type: 'update', id: rec.id, kind: rec.kind });
-    return rec;
+    const out = this.relocate(rec);
+    this.emit('change', { type: 'update', id: out.id, kind: out.kind });
+    return out;
   }
 
   remove(ref) {
@@ -292,6 +353,9 @@ class Store extends EventEmitter {
     if (f.status) { const s = asArray(f.status); arr = arr.filter((r) => s.includes(r.meta.status)); }
     if (f.open) arr = arr.filter((r) => r.meta.status !== 'done');
     if (f.type) { const t = asArray(f.type); arr = arr.filter((r) => t.includes(r.meta.type || 'note')); }
+    if (f.scope === 'system') arr = arr.filter((r) => r.kind !== 'note' || !r.meta.project);
+    if (f.scope === 'project+system' && f.projectScope) arr = arr.filter((r) => r.kind !== 'note' || !r.meta.project || r.meta.project === f.projectScope);
+    if (f.section) { const t = asArray(f.section); arr = arr.filter((r) => t.includes(r.meta.section)); }
     if (f.tag) { const t = String(f.tag).replace(/^#/, '').toLowerCase(); arr = arr.filter((r) => r.allTags.some((x) => x.toLowerCase() === t)); }
     if (f.assignee) arr = arr.filter((r) => String(r.meta.assignee || '').toLowerCase() === String(f.assignee).toLowerCase());
     const byUpdated = (a, b) => (a.updated < b.updated ? 1 : -1);
@@ -303,35 +367,43 @@ class Store extends EventEmitter {
   }
 
   search(q, f = {}) {
-    const tokens = String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
-    if (!tokens.length) return [];
-    const phrase = tokens.join(' ');
-    const pool = f.kind ? this.list(f.kind, f) : [...this.list('note', f), ...this.list('task', f), ...this.list('project', f)];
+    // BM25 ranking over title (×3), tags (×2) and body, with light stemming and prefix matching,
+    // so "deploying" finds "deployment" and partial words still hit. Results need ≥ half the words.
+    const qt = [...new Set(tokenize(q))];
+    if (!qt.length) return [];
+    const pool = f.kind ? this.list(f.kind, f) : [...this.list('note', f), ...this.list('mind', f), ...this.list('task', f), ...this.list('project', f)];
+    const docs = pool.map((r) => {
+      const title = tokenize(r.title); const tags = tokenize(r.allTags.join(' ')); const body = tokenize(r.body);
+      const tf = new Map();
+      const add = (arr, w) => { for (const t of arr) tf.set(t, (tf.get(t) || 0) + w); };
+      add(title, 3); add(tags, 2); add(body, 1);
+      return { r, tf, len: title.length * 3 + tags.length * 2 + body.length };
+    });
+    const N = docs.length || 1;
+    const avg = docs.reduce((a, d) => a + d.len, 0) / N || 1;
+    const termHits = (d, t) => { let v = d.tf.get(t) || 0; if (!v && t.length >= 4) for (const [k, c] of d.tf) if ((k.length > t.length && k.startsWith(t)) || (k.length >= 5 && t.length > k.length && t.startsWith(k))) v += c * 0.6; return v; };
+    const df = new Map(qt.map((t) => [t, docs.filter((d) => termHits(d, t) > 0).length]));
+    const phrase = String(q).toLowerCase().trim();
     const hits = [];
-    for (const r of pool) {
-      const title = r.title.toLowerCase();
-      const body = String(r.body).toLowerCase();
-      const tags = r.allTags.join(' ').toLowerCase();
-      let score = 0;
-      let ok = true;
-      for (const t of tokens) {
-        let s = 0;
-        if (title.includes(t)) s += 6;
-        if (tags.includes(t)) s += 4;
-        if (r.id.toLowerCase().includes(t)) s += 1;
-        let idx = body.indexOf(t);
-        let c = 0;
-        while (idx >= 0 && c < 8) { c++; idx = body.indexOf(t, idx + t.length); }
-        s += c;
-        if (!s) { ok = false; break; }
-        score += s;
+    for (const d of docs) {
+      let score = 0; let matched = 0;
+      for (const t of qt) {
+        const tf = termHits(d, t);
+        if (!tf) continue;
+        matched++;
+        const idf = Math.log(1 + (N - df.get(t) + 0.5) / (df.get(t) + 0.5));
+        score += idf * ((tf * 2.2) / (tf + 1.2 * (0.25 + 0.75 * (d.len / avg))));
       }
-      if (!ok) continue;
-      if (title.includes(phrase)) score += 8;
-      if (body.includes(phrase) && tokens.length > 1) score += 4;
-      const at = body.indexOf(tokens[0]);
-      const snippet = at >= 0 ? String(r.body).slice(Math.max(0, at - 70), at + 130).replace(/\s+/g, ' ').trim() : String(r.body).slice(0, 160).replace(/\s+/g, ' ').trim();
-      hits.push({ score, rec: r, snippet });
+      if (!matched || matched < (f.minMatch || Math.ceil(qt.length / 2))) continue;
+      if (d.r.title.toLowerCase().includes(phrase)) score += 3;
+      else if (qt.length > 1 && String(d.r.body).toLowerCase().includes(phrase)) score += 1.5;
+      score *= 1 + (matched / qt.length - 0.5) * 0.6;
+      const body = String(d.r.body);
+      const low = body.toLowerCase();
+      const firstRaw = String(q).toLowerCase().split(/\s+/).find((w) => w.length > 2 && low.includes(w));
+      const at = firstRaw ? low.indexOf(firstRaw) : -1;
+      const snippet = at >= 0 ? body.slice(Math.max(0, at - 70), at + 130).replace(/\s+/g, ' ').trim() : body.replace(/^#.*$/m, '').slice(0, 160).replace(/\s+/g, ' ').trim();
+      hits.push({ score: Math.round(score * 100) / 10, rec: d.r, snippet });
     }
     hits.sort((a, b) => b.score - a.score || (a.rec.updated < b.rec.updated ? 1 : -1));
     return hits.slice(0, Number(f.limit) || 20);
@@ -355,6 +427,7 @@ class Store extends EventEmitter {
       openTasks: all.filter((r) => r.kind === 'task' && r.meta.status !== 'done').length,
       doneTasks: all.filter((r) => r.kind === 'task' && r.meta.status === 'done').length,
       notes: all.filter((r) => r.kind === 'note').length,
+      mindQueued: all.filter((r) => r.kind === 'mind' && ['queued', 'fetched'].includes(r.meta.status)).length,
       actions24h: this.activity.filter((a) => a.ts >= dayAgo).length,
       agents: [...new Set(this.activity.map((a) => a.agent))].length,
     };
@@ -383,6 +456,10 @@ class Store extends EventEmitter {
     if (entry.ref) e.ref = String(entry.ref);
     fs.mkdirSync(path.dirname(this.actFile), { recursive: true });
     fs.appendFileSync(this.actFile, JSON.stringify(e) + '\n');
+    // every agent action on a project also lands in that project's agent journal
+    if (e.project && !/^(you|cortex)\b/.test(e.agent) && !/^(run\.|connect|setup|settings)/.test(e.action)) {
+      try { require('./journal').line(this.vault, e.project, e.agent, e.summary); } catch { /* never block logging */ }
+    }
     this.loadActivity(false);
     return e;
   }

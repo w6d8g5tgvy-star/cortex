@@ -123,14 +123,14 @@ async function main() {
     let input = '';
     process.stdin.setEncoding('utf8');
     process.stdin.on('data', (d) => (input += d));
-    process.stdin.on('end', () => {
+    process.stdin.on('end', async () => {
       try {
-        const out = require('../src/claude-hooks').runHook(JSON.parse(input || '{}'), vault);
+        const out = await require('../src/claude-hooks').runHook(JSON.parse(input || '{}'), vault);
         if (out) process.stdout.write(JSON.stringify(out));
       } catch { /* never break Claude */ }
       process.exit(0);
     });
-    setTimeout(() => process.exit(0), 5000).unref();
+    setTimeout(() => process.exit(0), 145000).unref(); // Claude Code's per-event timeouts cut this shorter
     return;
   }
 
@@ -174,6 +174,7 @@ async function main() {
     const { snippets } = require('../src/snippets');
     const s = snippets({ vault, port, host: '127.0.0.1', token });
     console.log(`\nCortex MCP connection configs  (vault: ${vault})\n`);
+    console.log(`━━ Prompt for your AI agents ━━  paste into CLAUDE.md, ChatGPT custom instructions, or project instructions\n${s.agentPrompt}\n`);
     for (const it of s.items) {
       console.log(`━━ ${it.name} ━━  ${it.where}\n${it.code}\n`);
       if (it.alt) console.log(`${it.altLabel}\n${it.alt}\n`);

@@ -63,12 +63,12 @@ const tool = async (c, name, args) => {
   assert.deepEqual(mem.links, ['projects/website-redesign']);
   assert.deepEqual(mem.unresolved_links, ['Missing Note']);
   const hits = await tool(c, 'memory_search', { query: 'primary color' });
-  assert.equal(hits[0].id, 'notes/brand-colors');
+  assert.equal(hits[0].id, 'notes/website-redesign/brand-colors');
   await tool(c, 'memory_update', { id: 'Brand colors', append: 'Secondary is teal.' });
-  const g = await tool(c, 'memory_get', { id: 'notes/brand-colors' });
+  const g = await tool(c, 'memory_get', { id: 'notes/website-redesign/brand-colors' });
   assert.ok(g.body.includes('Secondary is teal.'));
   const links = await tool(c, 'memory_links', { id: 'projects/website-redesign' });
-  assert.ok(links.backlinks.some((b) => b.id === 'notes/brand-colors'));
+  assert.ok(links.backlinks.some((b) => b.id === 'notes/website-redesign/brand-colors'));
   ok('memory write/search/update/get/links');
   const bad = await c.call('tools/call', { name: 'task_update', arguments: { id: task.id, status: 'nope' } });
   assert.equal(bad.result.isError, true);
@@ -79,9 +79,9 @@ const tool = async (c, name, args) => {
   ok('activity log attributed to client name');
   c.close();
 
-  const md = fs.readFileSync(path.join(vault, 'notes', 'brand-colors.md'), 'utf8');
+  const md = fs.readFileSync(path.join(vault, 'notes', 'website-redesign', 'brand-colors.md'), 'utf8');
   assert.ok(md.startsWith('---\ntitle: Brand colors\n'));
-  ok('memory stored as Markdown with front-matter');
+  ok('project memory stored as Markdown in its project folder');
 
   console.log('HTTP server + MCP');
   const srv = spawn(process.execPath, [CLI, 'start', '--vault', vault, '--port', String(port)], { stdio: ['ignore', 'pipe', 'inherit'] });
@@ -104,7 +104,7 @@ const tool = async (c, name, args) => {
   const state = await (await fetch(base + '/api/state')).json();
   assert.ok(state.tasks.length >= 5 && state.notes.length >= 3);
   const created = await (await fetch(base + '/api/items', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kind: 'note', title: 'From dashboard', body: 'Hi [[Brand colors]]' }) })).json();
-  const item = await (await fetch(base + '/api/item?id=' + encodeURIComponent('notes/brand-colors'))).json();
+  const item = await (await fetch(base + '/api/item?id=' + encodeURIComponent('notes/website-redesign/brand-colors'))).json();
   assert.ok(item.backlinks.some((b) => b.id === created.id));
   ok('REST API + backlinks');
   // external edit (e.g. from Obsidian) is picked up

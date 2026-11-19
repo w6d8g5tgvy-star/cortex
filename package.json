@@ -14,7 +14,7 @@
     "start": "node bin/cortex.js start --open",
     "mcp": "node bin/cortex.js mcp",
     "config": "node bin/cortex.js config",
-    "test": "node test/smoke.js && node test/live.js"
+    "test": "node test/smoke.js && node test/live.js && node test/features.js"
   },
   "engines": {
     "node": ">=18"

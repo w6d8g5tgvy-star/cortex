@@ -32,6 +32,11 @@ function onPath(bin) {
   return null;
 }
 const stdio = (vault) => ({ command: NODE, args: [CLI, 'mcp'], env: { CORTEX_VAULT: vault } });
+// On Windows `claude` is a .cmd shim, which needs a shell: quote every argument so paths with spaces survive.
+function runClaude(claude, args) {
+  if (plat === 'win32') return execFileSync(`"${claude}" ${args.map((a) => `"${String(a).replace(/"/g, '')}"`).join(' ')}`, { stdio: 'ignore', timeout: 30000, shell: true, windowsHide: true });
+  return execFileSync(claude, args, { stdio: 'ignore', timeout: 30000 });
+}
 
 const steps = {
   settings(vault, o) {
@@ -46,8 +51,8 @@ const steps = {
     const claude = onPath('claude');
     const hooks = claudeHooks.install({ vault });
     if (!claude) return { skip: false, msg: `live-view hooks + skill installed (${hooks.settingsFile}). Claude Code CLI not found on PATH, so add the MCP server later with: cortex config` };
-    try { execFileSync(claude, ['mcp', 'remove', '--scope', 'user', 'cortex'], { stdio: 'ignore', timeout: 20000, shell: plat === 'win32' }); } catch { /* not there yet */ }
-    execFileSync(claude, ['mcp', 'add', '--scope', 'user', '-e', `CORTEX_VAULT=${vault}`, 'cortex', '--', NODE, CLI, 'mcp'], { stdio: 'ignore', timeout: 20000, shell: plat === 'win32' });
+    try { runClaude(claude, ['mcp', 'remove', '--scope', 'user', 'cortex']); } catch { /* not there yet */ }
+    runClaude(claude, ['mcp', 'add', '--scope', 'user', '-e', `CORTEX_VAULT=${vault}`, 'cortex', '--', NODE, CLI, 'mcp']);
     return 'MCP server added, live-view hooks + skill installed';
   },
   claudeDesktop(vault) {

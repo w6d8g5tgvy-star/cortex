@@ -9,6 +9,10 @@ const DEFAULTS = () => ({
   updates: { auto: true, source: (pkg.cortex && pkg.cortex.updateSource) || '', checkHours: 6 },
   remote: { enabled: false, token: '' },
   screen: { enabled: false },
+  agents: { enabled: false, folders: [], permission: 'acceptEdits', maxMinutes: 120, saveGate: true, phoneApprovals: false, approvalWaitSeconds: 120, instructions: '' },
+  connector: { token: '', tunnel: false },
+  search: { semantic: true, model: 'nomic-embed-text' },
+  backups: { daily: true },
 });
 
 function file(vault) { return path.join(vault, '.cortex', 'settings.json'); }
@@ -25,7 +29,10 @@ function load(vault) {
   let saved = {};
   try { saved = JSON.parse(fs.readFileSync(file(vault), 'utf8')); } catch { /* defaults */ }
   const s = merge(DEFAULTS(), saved);
-  if (!s.remote.token) { s.remote.token = newToken(); save(vault, s); }
+  let dirty = false;
+  if (!s.remote.token) { s.remote.token = newToken(); dirty = true; }
+  if (!s.connector.token) { s.connector.token = newToken(); dirty = true; }
+  if (dirty) save(vault, s);
   return s;
 }
 

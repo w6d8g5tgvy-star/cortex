@@ -10,7 +10,7 @@ const path = require('path');
 const crypto = require('crypto');
 
 const MAX_EVENTS = 80;
-const STALE_DAYS = 7;
+const ARCHIVE_DAYS = 30;
 const dirOf = (vault) => path.join(vault, '.cortex', 'sessions');
 const safeId = (id) => String(id || '').replace(/[^A-Za-z0-9_\-]/g, '').slice(0, 80);
 const now = () => new Date().toISOString();
@@ -48,12 +48,12 @@ function list(vault) {
   const dir = dirOf(vault);
   let files = [];
   try { files = fs.readdirSync(dir).filter((f) => /^[A-Za-z0-9_\-]+\.json$/.test(f)); } catch { return []; }
-  const cutoff = Date.now() - STALE_DAYS * 864e5;
+  const cutoff = Date.now() - ARCHIVE_DAYS * 864e5;
   const out = [];
   for (const f of files) {
     const s = readJson(path.join(dir, f), null);
     if (!s) continue;
-    if (new Date(s.updated).getTime() < cutoff) { remove(vault, s.id); continue; }
+    if (!s.archived && new Date(s.updated).getTime() < cutoff) s.archived = true; // shown under Archived, never deleted automatically
     s.unread = inbox(vault, s.id).length - (s.delivered || 0);
     out.push(s);
   }
