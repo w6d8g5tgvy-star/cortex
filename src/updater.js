@@ -51,6 +51,15 @@ async function check(source) {
   }
   const repo = src.replace(/^github:/, '').replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '');
   if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) throw new Error(`Invalid update source "${src}". Use owner/repo or an https manifest URL.`);
+  // Preferred: release.json on the default branch (published by scripts/release.sh; no GitHub Release needed).
+  // It points at GitHub's source tarball for a version tag. Fallback: the latest GitHub Release.
+  let manifest = null;
+  try { manifest = await getJson(`https://raw.githubusercontent.com/${repo}/HEAD/release.json`); } catch { /* no manifest */ }
+  if (manifest && manifest.version) {
+    const v = String(manifest.version).replace(/^v/, '');
+    const url = manifest.url || `https://codeload.github.com/${repo}/tar.gz/refs/tags/v${v}`;
+    return { mode: 'github', repo, current, latest: v, available: cmpVer(v, current) > 0, url, sha256: manifest.sha256, notes: manifest.notes || '' };
+  }
   const rel = await getJson(`https://api.github.com/repos/${repo}/releases/latest`);
   const latest = String(rel.tag_name || '').replace(/^v/, '');
   const shaAsset = (rel.assets || []).find((a) => /sha256/i.test(a.name));
