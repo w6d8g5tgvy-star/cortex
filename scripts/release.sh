@@ -9,7 +9,7 @@ cd "$(dirname "$0")/.."
 V="${1:?usage: scripts/release.sh <version> [notes]}"
 NOTES="${2:-Cortex $V}"
 node -e "const f='package.json',p=require('./'+f);p.version='$V';require('fs').writeFileSync(f,JSON.stringify(p,null,2)+'\n')"
-node -e "require('fs').writeFileSync('release.json',JSON.stringify({version:'$V',branch:'main',notes:process.argv[1],date:new Date().toISOString()},null,2)+'\n')" "$NOTES"
+node -e "require('fs').writeFileSync('release.json',JSON.stringify({version:'$V',branch:'main',url:'https://codeload.github.com/'+require('child_process').execSync('git remote get-url origin').toString().trim().replace(/^.*github\.com[:/]/,'').replace(/\.git$/,'')+'/tar.gz/refs/heads/main',notes:process.argv[1],date:new Date().toISOString()},null,2)+'\n')" "$NOTES"
 npm test
 git add -A && git commit -m "Release v$V"
 git push origin HEAD:main
