@@ -706,7 +706,7 @@ const isLight = () => document.documentElement.dataset.theme === 'light' || (!do
       ctx.beginPath(); ctx.arc(s.x, (s.y + t * 0.015 * s.z) % h, s.r, 0, 6.283); ctx.fill();
     }
     // faint drifting neural web
-    for (const n of neurons) { n.x += n.vx; n.y += n.vy; if (n.x < -40) n.x = w + 40; if (n.x > w + 40) n.x = -40; if (n.y < -40) n.y = h + 40; if (n.y > h + 40) n.y = -40; }
+    for (const n of neurons) { n.vz *= 0.6; n.x += n.vx; n.y += n.vy; n.z += n.vz; if (n.x < -40) n.x = w + 40; if (n.x > w + 40) n.x = -40; if (n.y < -40) n.y = h + 40; if (n.y > h + 40) n.y = -40; }
     ctx.lineWidth = 1;
     for (let i = 0; i < neurons.length; i++) {
       for (let j = i + 1; j < neurons.length; j++) {
@@ -764,7 +764,7 @@ async function renderGraph() {
   const showMind = store.get('gMind', true);
   const gscope = store.get('gScope', 'all');
   const gproj = store.get('gProj', (S.projects[0] || {}).slug || '');
-  main.innerHTML = `<div class="graph-wrap view-in"><canvas id="gc"></canvas>
+  main.innerHTML = `<div class="graph-wrap view-in"><canvas id="gc" tabindex="0" aria-label="Neural vault map. Use arrow keys to orbit, plus and minus to zoom, and Home to reset."></canvas>
     <div style="position:absolute;top:18px;left:50%;transform:translateX(-50%);display:flex;gap:8px;align-items:center;z-index:2">
       <div class="seg" style="background:rgba(10,13,32,.6)">${[['project', 'Project memories'], ['system', 'System memories'], ['all', 'Everything']].map(([k, l]) => `<button data-gscope="${k}" class="${gscope === k ? 'on' : ''}" style="color:#dfe6ff">${l}</button>`).join('')}</div>
       ${gscope === 'project' ? `<select class="input" id="g-proj" style="width:auto;background:rgba(10,13,32,.6);color:#e9edff">${S.projects.map((p) => `<option value="${esc(p.slug)}" ${p.slug === gproj ? 'selected' : ''}>${esc(p.title)}</option>`).join('')}</select>` : ''}
@@ -775,62 +775,80 @@ async function renderGraph() {
       <label><span class="pdot" style="color:#5ce1ff;background:#5ce1ff"></span> Memories &amp; notes</label>
       <label><input type="checkbox" id="g-tasks" ${showTasks ? 'checked' : ''}> <span class="pdot" style="color:#ffc35c;background:#ffc35c"></span> Tasks</label>
       <label><input type="checkbox" id="g-mind" ${showMind ? 'checked' : ''}> <span class="pdot" style="color:#ff8ad8;background:#ff8ad8"></span> Mind</label>
-      <span class="muted small">Scroll to zoom · drag to pan · click a neuron to open</span>
+      <span class="muted small">Drag to orbit &middot; Shift-drag to pan &middot; scroll or pinch to zoom</span>
     </div>
     <div class="graph-search"><input class="input" id="g-q" placeholder="Find a neuron…" autocomplete="off"></div>
+    <button class="btn sm" id="g-reset" style="position:absolute;bottom:42px;right:18px">Reset view</button>
     <div class="graph-stats" id="g-stats"></div>
     <div class="graph-tip" id="g-tip"></div></div>`;
   $('#g-tasks').onchange = (e) => { store.set('gTasks', e.target.checked); renderGraph(); };
   $$('[data-gscope]').forEach((b) => (b.onclick = () => { store.set('gScope', b.dataset.gscope); renderGraph(); }));
   if ($('#g-proj')) $('#g-proj').onchange = (e) => { store.set('gProj', e.target.value); renderGraph(); };
   $('#g-mind').onchange = (e) => { store.set('gMind', e.target.checked); renderGraph(); };
-  const data = await api('/api/graph');
-  if (S.route[0] !== 'graph') return;
   const canvas = $('#gc');
+  const data = await api('/api/graph').catch((error) => { if (canvas.isConnected) fail(error); });
+  if (!data || !canvas.isConnected || S.route[0] !== 'graph') return;
   const ctx = canvas.getContext('2d');
   const inScope = (n) => gscope === 'all' ? true
     : gscope === 'system' ? n.kind === 'note' && !n.project
     : (n.kind === 'project' ? n.id === 'projects/' + gproj : n.project === gproj);
   const nodes = data.nodes.filter((n) => n.kind !== 'skill' && inScope(n) && (showTasks || n.kind !== 'task') && (showMind || n.kind !== 'mind'))
-    .map((n, i, arr) => { const a = (i / arr.length) * 6.283 * 3; const r = 60 + i * 4; return { ...n, x: Math.cos(a) * r, y: Math.sin(a) * r, vx: 0, vy: 0, phase: Math.random() * 6.283 }; });
+    .map((n, i, arr) => { const a = (i / arr.length) * 6.283 * 3; const r = 60 + i * 4; return { ...n, x: Math.cos(a) * r, y: Math.sin(a) * r, z: Math.sin(i * 2.4) * 65, vx: 0, vy: 0, vz: 0, phase: Math.random() * 6.283 }; });
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const edges = data.edges.filter((e) => byId.has(e.source) && byId.has(e.target)).map((e) => ({ ...e, s: byId.get(e.source), t: byId.get(e.target), k: (Math.random() - 0.5) * 0.35 }));
   const deg = new Map();
   edges.forEach((e) => { deg.set(e.s, (deg.get(e.s) || 0) + 1); deg.set(e.t, (deg.get(e.t) || 0) + 1); });
   const radius = (n) => (n.kind === 'project' ? 9 : n.kind === 'task' ? 3.6 : 4.8) + Math.min(7, (deg.get(n) || 0) * 0.7);
   $('#g-stats').textContent = `${nodes.length} NEURONS · ${edges.length} SYNAPSES`;
-  G = { raf: 0, alpha: 1, view: { x: 0, y: 0, k: 1 }, hover: null, drag: null, pulses: [], q: '', t: 0 };
+  const initialView = { x: 0, y: 0, k: 1, yaw: 0.25, pitch: 0.25 };
+  G = { raf: 0, alpha: 1, view: { ...initialView }, hover: null, pulses: [], q: '', t: 0 };
   const dpr = Math.min(2, window.devicePixelRatio || 1);
   G.resize = () => { const r = canvas.getBoundingClientRect(); canvas.width = r.width * dpr; canvas.height = r.height * dpr; G.w = r.width; G.h = r.height; G.alpha = Math.max(G.alpha, 0.1); };
   G.resize();
   window.addEventListener('resize', G.resize);
-  const toWorld = (px, py) => ({ x: (px - G.w / 2 - G.view.x) / G.view.k, y: (py - G.h / 2 - G.view.y) / G.view.k });
-  const pick = (px, py) => { const p = toWorld(px, py); let best = null; let bd = Infinity; for (const n of nodes) { const d = Math.hypot(n.x - p.x, n.y - p.y); if (d < radius(n) + 6 / G.view.k && d < bd) { bd = d; best = n; } } return best; };
+  const project = (n) => {
+    const { yaw, pitch } = G.view;
+    const x = n.x * Math.cos(yaw) - n.z * Math.sin(yaw);
+    const depth = n.x * Math.sin(yaw) + n.z * Math.cos(yaw);
+    n.px = x; n.py = n.y * Math.cos(pitch) - depth * Math.sin(pitch);
+    n.depth = n.y * Math.sin(pitch) + depth * Math.cos(pitch);
+  };
+  const pick = (px, py) => {
+    let best = null;
+    for (const n of nodes) {
+      const x = G.w / 2 + G.view.x + n.px * G.view.k;
+      const y = G.h / 2 + G.view.y + n.py * G.view.k;
+      if (Math.hypot(x - px, y - py) <= radius(n) * G.view.k + 6 && (!best || n.depth > best.depth)) best = n;
+    }
+    return best;
+  };
   const neighbors = (n) => { const s = new Set([n]); edges.forEach((e) => { if (e.s === n) s.add(e.t); if (e.t === n) s.add(e.s); }); return s; };
   const dust = Array.from({ length: 160 }, () => ({ x: (Math.random() - 0.5) * 3000, y: (Math.random() - 0.5) * 3000, r: Math.random() * 1.2 + 0.2, z: Math.random() * 0.6 + 0.2 }));
   function physics() {
-    const a = Math.max(G.alpha, REDUCED ? 0 : 0.012);
+    const a = G.alpha < 0.008 ? 0 : G.alpha;
     if (a <= 0) return;
     for (let i = 0; i < nodes.length; i++) {
       const n = nodes[i];
       for (let j = i + 1; j < nodes.length; j++) {
         const m = nodes[j];
         let dx = n.x - m.x; let dy = n.y - m.y;
-        const d2 = dx * dx + dy * dy || 0.01;
+        const dz = n.z - m.z;
+        const d2 = dx * dx + dy * dy + dz * dz || 0.01;
         if (d2 > 200000) continue;
         const f = (1100 / d2) * a;
-        dx *= f; dy *= f; n.vx += dx; n.vy += dy; m.vx -= dx; m.vy -= dy;
+        dx *= f; dy *= f; n.vx += dx; n.vy += dy; m.vx -= dx; m.vy -= dy; n.vz += dz * f; m.vz -= dz * f;
       }
-      n.vx -= n.x * 0.0035 * a; n.vy -= n.y * 0.0035 * a;
+      n.vx -= n.x * 0.0035 * a; n.vy -= n.y * 0.0035 * a; n.vz -= n.z * 0.0035 * a;
       if (!REDUCED && G.alpha < 0.05) { n.vx += Math.cos(G.t * 0.01 + n.phase) * 0.012; n.vy += Math.sin(G.t * 0.012 + n.phase) * 0.012; }
     }
     for (const e of edges) {
       const dx = e.t.x - e.s.x; const dy = e.t.y - e.s.y;
-      const d = Math.hypot(dx, dy) || 1;
+      const dz = e.t.z - e.s.z;
+      const d = Math.hypot(dx, dy, dz) || 1;
       const f = ((d - (e.type === 'project' ? 80 : 110)) / d) * 0.045 * a;
-      e.s.vx += dx * f; e.s.vy += dy * f; e.t.vx -= dx * f; e.t.vy -= dy * f;
+      e.s.vx += dx * f; e.s.vy += dy * f; e.t.vx -= dx * f; e.t.vy -= dy * f; e.s.vz += dz * f; e.t.vz -= dz * f;
     }
-    for (const n of nodes) { if (n === G.drag) continue; n.vx *= 0.6; n.vy *= 0.6; n.x += n.vx; n.y += n.vy; }
+    for (const n of nodes) { n.vx *= 0.6; n.vy *= 0.6; n.x += n.vx; n.y += n.vy; }
     G.alpha *= 0.985;
   }
   function spawnPulses() {
@@ -854,6 +872,8 @@ async function renderGraph() {
     }
     ctx.translate(G.w / 2 + G.view.x, G.h / 2 + G.view.y);
     ctx.scale(G.view.k, G.view.k);
+    nodes.forEach(project);
+    const drawn = [...nodes].sort((a, b) => a.depth - b.depth);
     const hl = G.hover ? neighbors(G.hover) : null;
     const q = G.q;
     const match = (n) => q && n.title.toLowerCase().includes(q);
@@ -861,12 +881,12 @@ async function renderGraph() {
     for (const e of edges) {
       const on = hl && hl.has(e.s) && hl.has(e.t);
       const dim = (hl && !on) || (q && !match(e.s) && !match(e.t));
-      const [, , cx, cy] = curvePoint(e.s.x, e.s.y, e.t.x, e.t.y, e.k, 0);
-      const g = ctx.createLinearGradient(e.s.x, e.s.y, e.t.x, e.t.y);
+      const [, , cx, cy] = curvePoint(e.s.px, e.s.py, e.t.px, e.t.py, e.k, 0);
+      const g = ctx.createLinearGradient(e.s.px, e.s.py, e.t.px, e.t.py);
       const al = dim ? 0.05 : on ? 0.75 : e.type === 'project' ? 0.16 : 0.3;
       g.addColorStop(0, hexA(nodeColor(e.s), al)); g.addColorStop(1, hexA(nodeColor(e.t), al));
       ctx.strokeStyle = g; ctx.lineWidth = (on ? 1.8 : 1) / G.view.k;
-      ctx.beginPath(); ctx.moveTo(e.s.x, e.s.y); ctx.quadraticCurveTo(cx, cy, e.t.x, e.t.y); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(e.s.px, e.s.py); ctx.quadraticCurveTo(cx, cy, e.t.px, e.t.py); ctx.stroke();
     }
     // synaptic impulses
     if (G.t % 6 === 0) spawnPulses();
@@ -874,20 +894,20 @@ async function renderGraph() {
     for (const p of G.pulses) {
       p.t += p.speed;
       const tt = p.dir > 0 ? p.t : 1 - p.t;
-      const [x, y] = curvePoint(p.e.s.x, p.e.s.y, p.e.t.x, p.e.t.y, p.e.k, tt);
+      const [x, y] = curvePoint(p.e.s.px, p.e.s.py, p.e.t.px, p.e.t.py, p.e.k, tt);
       const col = nodeColor(p.dir > 0 ? p.e.t : p.e.s);
       const r = 2.2 / Math.sqrt(G.view.k);
       const g = ctx.createRadialGradient(x, y, 0, x, y, r * 5);
       g.addColorStop(0, 'rgba(255,255,255,0.95)'); g.addColorStop(0.3, hexA(col, 0.6)); g.addColorStop(1, hexA(col, 0));
       ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, r * 5, 0, 6.283); ctx.fill();
     }
-    for (const n of nodes) {
+    for (const n of drawn) {
       const dim = (hl && !hl.has(n)) || (q && !match(n));
       const breathe = REDUCED ? 1 : 0.85 + 0.15 * Math.sin(G.t * 0.03 + n.phase);
-      drawNeuron(ctx, n.x, n.y, radius(n) * (n === G.hover ? 1.35 : 1), nodeColor(n), dim ? 0.18 : breathe);
+      drawNeuron(ctx, n.px, n.py, radius(n) * (n === G.hover ? 1.35 : 1), nodeColor(n), dim ? 0.18 : breathe);
     }
     ctx.globalCompositeOperation = 'source-over';
-    for (const n of nodes) {
+    for (const n of drawn) {
       const dim = (hl && !hl.has(n)) || (q && !match(n));
       if (dim || n.kind === 'task') continue;
       if (!(G.view.k > 0.75 || n.kind === 'project' || n === G.hover || match(n) || (hl && hl.has(n)))) continue;
@@ -897,31 +917,38 @@ async function renderGraph() {
       ctx.fillStyle = n === G.hover || match(n) ? '#ffffff' : 'rgba(205,215,245,0.78)';
       ctx.shadowColor = hexA(nodeColor(n), 0.8); ctx.shadowBlur = 8;
       const label = n.title.length > 32 ? n.title.slice(0, 31) + '…' : n.title;
-      ctx.fillText(label, n.x, n.y + radius(n) + 14 / Math.max(0.8, G.view.k));
+      ctx.fillText(label, n.px, n.py + radius(n) + 14 / Math.max(0.8, G.view.k));
       ctx.shadowBlur = 0;
     }
   }
   function loop() { if (!G) return; physics(); draw(); G.raf = requestAnimationFrame(loop); }
   const tip = $('#g-tip');
   let down = null;
-  canvas.onmousedown = (e) => {
+  canvas.style.touchAction = 'none';
+  const orbit = (dx, dy) => { G.view.yaw -= dx * 0.008; G.view.pitch += dy * 0.008; };
+  canvas.onpointerdown = (e) => {
+    if (e.pointerType === 'touch' || e.button !== 0) return;
+    canvas.setPointerCapture(e.pointerId);
     const r = canvas.getBoundingClientRect();
-    const n = pick(e.clientX - r.left, e.clientY - r.top);
-    down = { x: e.clientX, y: e.clientY, n, vx: G.view.x, vy: G.view.y, moved: false };
-    if (n) { G.drag = n; G.alpha = Math.max(G.alpha, 0.3); }
+    down = { x: e.clientX, y: e.clientY, n: pick(e.clientX - r.left, e.clientY - r.top), moved: false, pan: e.shiftKey };
   };
-  window.addEventListener('mouseup', function up() {
-    if (!G) return window.removeEventListener('mouseup', up);
-    if (down && !down.moved && down.n) openItem(down.n.id);
-    down = null; G.drag = null;
-  });
-  canvas.onmousemove = (e) => {
+  canvas.onpointerup = (e) => {
+    if (e.pointerType === 'touch') return;
+    const n = down && !down.moved && down.n;
+    down = null;
+    if (n) openItem(n.id);
+  };
+  canvas.onlostpointercapture = () => { down = null; };
+  canvas.onpointermove = (e) => {
+    if (e.pointerType === 'touch') return;
     const r = canvas.getBoundingClientRect();
     const px = e.clientX - r.left; const py = e.clientY - r.top;
     if (down) {
-      if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 3) down.moved = true;
-      if (G.drag) { const p = toWorld(px, py); G.drag.x = p.x; G.drag.y = p.y; G.drag.vx = G.drag.vy = 0; G.alpha = Math.max(G.alpha, 0.2); }
-      else { G.view.x = down.vx + (e.clientX - down.x); G.view.y = down.vy + (e.clientY - down.y); }
+      const dx = e.clientX - down.x; const dy = e.clientY - down.y;
+      if (!down.moved && Math.hypot(dx, dy) < 4) return;
+      down.moved = true; down.x = e.clientX; down.y = e.clientY;
+      if (down.pan) { G.view.x += dx; G.view.y += dy; }
+      else orbit(dx, dy);
       return;
     }
     G.hover = pick(px, py);
@@ -937,7 +964,7 @@ async function renderGraph() {
     const k = Math.min(4, Math.max(0.2, G.view.k * (e.deltaY < 0 ? 1.12 : 1 / 1.12)));
     G.view.x = px - ((px - G.view.x) * k) / G.view.k; G.view.y = py - ((py - G.view.y) * k) / G.view.k; G.view.k = k;
   };
-  // touch: one finger pans / taps, two fingers pinch
+  // touch: one finger orbits or taps, two fingers pinch
   let touch = null;
   canvas.ontouchstart = (e) => {
     const r = canvas.getBoundingClientRect();
@@ -947,16 +974,31 @@ async function renderGraph() {
   canvas.ontouchmove = (e) => {
     e.preventDefault();
     if (!touch) return;
-    if (touch.pinch && e.touches.length === 2) { const [a, b] = e.touches; G.view.k = Math.min(4, Math.max(0.2, touch.k * (Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) / touch.pinch))); return; }
+    if (touch.pinch > 0 && e.touches.length === 2) { const [a, b] = e.touches; G.view.k = Math.min(4, Math.max(0.2, touch.k * (Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) / touch.pinch))); return; }
+    if (touch.pinch !== undefined || e.touches.length !== 1) return;
     const t0 = e.touches[0];
-    if (Math.hypot(t0.clientX - touch.x, t0.clientY - touch.y) > 6) touch.moved = true;
-    G.view.x = touch.vx + (t0.clientX - touch.x); G.view.y = touch.vy + (t0.clientY - touch.y);
+    const dx = t0.clientX - touch.x; const dy = t0.clientY - touch.y;
+    if (!touch.moved && Math.hypot(dx, dy) < 6) return;
+    touch.moved = true; touch.x = t0.clientX; touch.y = t0.clientY;
+    orbit(dx, dy);
   };
   canvas.ontouchend = () => { if (touch && !touch.pinch && !touch.moved && touch.n) openItem(touch.n.id); touch = null; };
+  canvas.ontouchcancel = () => { touch = null; };
+  const resetView = () => { G.view = { ...initialView }; };
+  $('#g-reset').onclick = resetView;
+  canvas.onkeydown = (e) => {
+    const directions = { ArrowLeft: [-32, 0], ArrowRight: [32, 0], ArrowUp: [0, -32], ArrowDown: [0, 32] };
+    if (Object.hasOwn(directions, e.key)) orbit(...directions[e.key]);
+    else if (e.key === 'Home') resetView();
+    else if (e.key === '+' || e.key === '=') G.view.k = Math.min(4, G.view.k * 1.12);
+    else if (e.key === '-') G.view.k = Math.max(0.2, G.view.k / 1.12);
+    else return;
+    e.preventDefault();
+  };
   $('#g-q').oninput = (e) => {
     G.q = e.target.value.trim().toLowerCase();
     const hit = G.q && nodes.find((n) => n.title.toLowerCase().includes(G.q));
-    if (hit) { G.view.x = -hit.x * G.view.k; G.view.y = -hit.y * G.view.k; }
+    if (hit) { G.view.x = -hit.px * G.view.k; G.view.y = -hit.py * G.view.k; }
   };
   $('#g-q').onkeydown = (e) => { if (e.key === 'Enter') { const hit = nodes.find((n) => n.title.toLowerCase().includes(G.q)); if (hit) openItem(hit.id); } };
   for (let i = 0; i < 160; i++) physics();
@@ -1028,6 +1070,22 @@ function drawLocalGraph(n) {
 // ---------- AGENTS HUB ----------
 const HUB = { sel: store.get('hubSel', ''), filter: store.get('hubFilter', { q: '', project: '', agent: '', status: 'active' }), tab: store.get('hubTab', 'launch'), data: null };
 const chatStatus = (x) => (x.archived ? 'archived' : ['working', 'needs-you'].includes(x.status) ? 'active' : 'idle');
+function agentUsageHtml() {
+  const since = Date.now() - 864e5;
+  const usageRows = Object.entries({ claude: 'Claude Code', codex: 'Codex' }).map(([tool, label]) => {
+    const runs = LIVE.sessions.filter((run) => run.tool === tool && run.launched && run.usage);
+    const totals = runs.reduce((sum, run) => ({
+      input: sum.input + run.usage.input, output: sum.output + run.usage.output
+    }), { input: 0, output: 0 });
+    const recent = runs.filter((run) => Date.parse(run.started) >= since)
+      .reduce((sum, run) => sum + run.usage.input + run.usage.output, 0);
+    return [label, runs.length ? recent.toLocaleString() + ' tokens in 24h. ' +
+      (totals.input + totals.output).toLocaleString() + ' recorded (' +
+      totals.input.toLocaleString() + ' input, ' + totals.output.toLocaleString() + ' output)' : 'No token reports yet'];
+  });
+  return usageRows.map(([tool, total]) => `<div class="row"><b>${tool}</b><span>${total}</span></div>`).join('');
+}
+
 async function renderAgents() {
   try {
     const [ag, lv, cfg] = await Promise.all([api('/api/agents'), api('/api/live'), S.config ? Promise.resolve(S.config) : api('/api/config')]);
@@ -1049,6 +1107,10 @@ async function renderAgents() {
     </div>` : '';
   main.innerHTML = `
     <div class="page-head"><div><div class="eyebrow">Agent control</div><h1>Your <span class="grad">agents</span></h1><p>Send agents to work from here or your phone, keep every chat organised by project, and see exactly what each one did.</p></div></div>
+    <div class="panel" style="margin-bottom:12px"><h3>AI usage</h3>
+      <p class="small muted">Totals for saved Cortex runs. Account quota and reset times are unavailable here.</p>
+      <div id="agent-usage">${agentUsageHtml()}</div>
+    </div>
     <div class="hub-grid">
       <div class="panel">
         <div class="row" style="margin-bottom:14px"><div class="seg"><button data-hubtab="launch" class="${HUB.tab === 'launch' ? 'on' : ''}">${icon('i-bolt')} Start an agent</button><button data-hubtab="command" class="${HUB.tab === 'command' ? 'on' : ''}">${icon('i-send')} Send a command</button></div></div>
@@ -1380,7 +1442,12 @@ function updateLive() {
   liveTimer = setTimeout(async () => {
     try { await fetchLive(); } catch { return; }
     renderNav();
-    if (S.route[0] === 'agents') { renderHubList(); return; }
+    if (S.route[0] === 'agents') {
+      const usage = $('#agent-usage');
+      if (usage) usage.innerHTML = agentUsageHtml();
+      renderHubList();
+      return;
+    }
     if (S.route[0] === 'home') { const n = $('#approvals'); if (n) n.innerHTML = approvalsHtml(); return; }
     if (S.route[0] !== 'live') return;
     if (LIVE.rendered !== LIVE.screenEnabled) renderLive(true); else { renderSessions(); const ap = $('#approvals'); if (ap) ap.innerHTML = approvalsHtml(); }

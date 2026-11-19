@@ -100,6 +100,11 @@ const tool = async (c, name, args) => {
   ok('HTTP MCP initialize/session/tools');
   const evil = await fetch(base + '/api/state', { headers: { Origin: 'http://evil.example' } });
   assert.equal(evil.status, 403);
+  assert.equal((await fetch(base + '/api/state', { headers: { Origin: 'null' } })).status, 403);
+  assert.equal((await fetch(base + '/api/state', { headers: { Origin: 'http://127.0.0.1:1' } })).status, 403);
+  const sameOrigin = await fetch(base + '/api/state', { headers: { Origin: base } });
+  assert.equal(sameOrigin.status, 200);
+  assert.equal(sameOrigin.headers.get('x-content-type-options'), 'nosniff');
   ok('cross-origin requests blocked');
   const state = await (await fetch(base + '/api/state')).json();
   assert.ok(state.tasks.length >= 5 && state.notes.length >= 3);

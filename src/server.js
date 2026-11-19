@@ -6,6 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const { monitorEventLoopDelay } = require('perf_hooks');
 const { createMcp, VERSION } = require('./mcp');
 const { snippets } = require('./snippets');
 const sessions = require('./sessions');
@@ -63,6 +64,28 @@ function startServer({ store, port, host, token: cliToken }) {
   const mcp = createMcp(store);
   const mcpSessions = new Map();
   const sse = new Set();
+  const eventLoop = monitorEventLoopDelay({ resolution: 20 });
+  eventLoop.enable();
+  let errors = 0;
+  let slowRequests = 0;
+  const healthTimer = setInterval(() => {
+    const lag = Math.round(eventLoop.percentile(99) / 1e6);
+    eventLoop.reset();
+    const findings = [];
+    if (errors) findings.push('- HTTP server errors: ' + errors + '. Check the server logs for the cause.');
+    if (slowRequests) findings.push('- Dashboard API responses taking more than a second: ' + slowRequests + '. Profile data loading.');
+    if (lag > 100) findings.push('- 99th percentile event-loop delay: ' + lag + ' ms. Profile synchronous disk and indexing work.');
+    errors = slowRequests = 0;
+    if (!findings.length || !store.get('projects/cortex')) return;
+    const title = 'Cortex runtime health';
+    const body = '# ' + title + '\n\nFindings from the latest 15-minute interval with issues.\n\n' + findings.join('\n');
+    const existing = store.get('notes/cortex/cortex-runtime-health');
+    if (existing?.body.trim() === body.trim()) return;
+    try {
+      if (existing) store.update(existing.id, { body });
+      else store.create('note', { title, body, type: 'reference', project: 'cortex' });
+    } catch (error) { console.error('Cortex health report:', error.message); }
+  }, 15 * 60e3).unref();
   const updateState = { checking: false, last: null, info: null, error: null, installing: false };
   const conf = () => settingsMod.load(vault);
   const tokenNow = () => cliToken || conf().remote.token;
@@ -126,10 +149,10 @@ function startServer({ store, port, host, token: cliToken }) {
   };
   const isAllowedOrigin = (req) => {
     const origin = req.headers.origin;
-    if (!origin || origin === 'null') return true;
-    try { const o = new URL(origin); return o.host === req.headers.host || LOCAL_HOSTS.has(o.hostname); } catch { return false; }
+    if (!origin) return true;
+    try { const o = new URL(origin); return ['http:', 'https:'].includes(o.protocol) && o.host === req.headers.host; } catch { return false; }
   };
-  const cookieToken = (req) => { const m = String(req.headers.cookie || '').match(/(?:^|;\s*)cortex_token=([^;]+)/); return m ? decodeURIComponent(m[1]) : ''; };
+  const cookieToken = (req) => { const m = String(req.headers.cookie || '').match(/(?:^|;\s*)cortex_token=([^;]+)/); try { return m ? decodeURIComponent(m[1]) : ''; } catch { return ''; } };
   const tokenOk = (given, t = tokenNow()) => {
     if (!t || !given) return false;
     const a = Buffer.from(String(given));
@@ -198,7 +221,11 @@ function startServer({ store, port, host, token: cliToken }) {
       headers['Mcp-Session-Id'] = sid;
     }
     let session = sid && mcpSessions.get(sid);
-    if (!session) session = { transport: 'http', local: isLocal(req), agent: String(req.headers['x-agent-name'] || 'http-agent').slice(0, 60) };
+    const local = !connector && isLocal(req);
+    if (session && (session.local !== local || session.transport !== (connector ? 'connector' : 'http'))) {
+      return send(res, 403, { error: 'Invalid MCP session for this connection' });
+    }
+    if (!session) session = { transport: connector ? 'connector' : 'http', local, agent: String(req.headers['x-agent-name'] || 'http-agent').slice(0, 60) };
     if (mcpSessions.size > 500) mcpSessions.delete(mcpSessions.keys().next().value);
     const out = await mcp.handle(msg, session);
     if (!out) { res.writeHead(202, headers); return res.end(); }
@@ -449,7 +476,7 @@ function startServer({ store, port, host, token: cliToken }) {
       await runner.available();
       const proj = cmd.project ? store.get('projects/' + cmd.project) : null;
       const cwd = (proj && proj.meta.folder && agents.folderAllowed(proj.meta.folder, s.folders) && proj.meta.folder) || s.folders[0];
-      if (!cwd) return send(res, 400, { error: 'Add an allowed folder first (Agents → Start an agent).' });
+      if (!agents.folderAllowed(cwd, s.folders)) return send(res, 400, { error: 'Add an allowed folder first (Agents → Start an agent).' });
       const r = runner.launch({ tool: b.tool || 'claude', prompt: `${cmd.text}\n\n(This is Cortex command ${cmd.id}. When finished, call command_complete with id "${cmd.id}" and the result.)`, cwd, permission: s.permission, maxMinutes: s.maxMinutes, project: cmd.project, from: agent });
       try { const f = path.join(vault, '.cortex', 'commands', cmd.id + '.json'); fs.writeFileSync(f, JSON.stringify({ ...cmd, status: 'taken', takenBy: `Claude Code run ${r.id}`, takenAt: new Date().toISOString() })); fs.closeSync(fs.openSync(f.replace(/\.json$/, '.claim'), 'a')); } catch { /* best effort */ }
       broadcast({ type: 'live' });
@@ -630,8 +657,16 @@ function startServer({ store, port, host, token: cliToken }) {
   }
 
   const server = http.createServer(async (req, res) => {
-    const u = new URL(req.url, 'http://localhost');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('Referrer-Policy', 'no-referrer');
     try {
+      const u = new URL(req.url, 'http://localhost');
+      const started = Date.now();
+      res.on('finish', () => {
+        if (res.statusCode >= 500) errors++;
+        if (u.pathname.startsWith('/api/') && u.pathname !== '/api/events' && res.statusCode < 400 && Date.now() - started > 1000) slowRequests++;
+      });
       if (!isAllowedOrigin(req)) return send(res, 403, { error: 'Forbidden origin' });
       if (u.pathname.startsWith('/mcp/')) {
         if (!tokenOk(decodeURIComponent(u.pathname.slice(5)), conf().connector.token)) return send(res, 401, { error: 'Unknown connector link' });
@@ -647,13 +682,19 @@ function startServer({ store, port, host, token: cliToken }) {
       }
       return serveStatic(req, res, u);
     } catch (e) {
-      const code = /not found/i.test(e.message) ? 404 : /invalid|required|unknown|empty|turned off|up to date/i.test(e.message) ? 400 : 500;
-      return send(res, code, { error: e.message });
+      const code = /not found/i.test(e.message) ? 404
+        : /never overwrites|will not remove/i.test(e.message) ? 409
+        : e instanceof SyntaxError || /invalid|required|unknown|empty|turned off|up to date/i.test(e.message) ? 400 : 500;
+      if (code === 500) console.error('Cortex request failed:', e.message);
+      if (res.headersSent || res.destroyed) return res.end();
+      return send(res, code, { error: code === 500 ? 'Internal server error' : e.message });
     }
   });
 
   return new Promise((resolve, reject) => {
-    server.once('error', reject);
+    const stopHealth = () => { clearInterval(healthTimer); eventLoop.disable(); };
+    server.once('close', stopHealth);
+    server.once('error', (error) => { stopHealth(); reject(error); });
     server.listen(port, host, () => { setTimeout(() => updater.confirm(), 8000).unref(); resolve(server); });
   });
 }

@@ -20,12 +20,16 @@ fs.mkdirSync(home, { recursive: true });
 const port = 21000 + Math.floor(Math.random() * 2000);
 const base = `http://127.0.0.1:${port}`;
 const ENV = { ...process.env, HOME: home, USERPROFILE: home, CORTEX_ALLOW_PRIVATE_FETCH: '1', CORTEX_OLLAMA: 'http://127.0.0.1:1' };
+delete ENV.CORTEX_RUN_ID;
+delete ENV.CORTEX_SUPERVISED;
 let passed = 0;
 const ok = (n) => { passed++; console.log('  ✓', n); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const J = (r) => r.json();
 const post = (p, body) => fetch(base + p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 const patch = (p, body) => fetch(base + p, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+const zipList = (file) => execFileSync(process.platform === 'win32' ? 'tar.exe' : 'unzip',
+  process.platform === 'win32' ? ['-tf', file] : ['-l', file]).toString();
 const read = (...p) => fs.readFileSync(path.join(vault, ...p), 'utf8');
 
 function mcp(name = 'test-agent') {
@@ -54,7 +58,7 @@ const out=o=>process.stdout.write(JSON.stringify(o)+'\\n');
 out({type:'system',subtype:'init',session_id:'sess-123',model:'fake-model'});
 out({type:'assistant',message:{content:[{type:'text',text:'Looking at the project memories first.'},{type:'tool_use',name:'Edit',input:{file_path:'/x/app.js'}}]}});
 if(input.includes('SLOW')) await new Promise(r=>setTimeout(r,60000));
-out({type:'result',subtype:'success',is_error:false,result:'Fixed the login bug and added a test.',num_turns:3,total_cost_usd:0.01,session_id:'sess-123'});});`);
+out({type:'result',subtype:'success',is_error:false,result:'Fixed the login bug and added a test.',num_turns:3,total_cost_usd:0.01,usage:{input_tokens:13,output_tokens:27,cache_read_input_tokens:5,cache_creation_input_tokens:2},session_id:'sess-123'});});`);
   // fake yt-dlp: prints metadata JSON with a captions URL served by our fake site
   const site = http.createServer((req, res) => {
     if (req.url === '/article') { res.setHeader('content-type', 'text/html'); return res.end(`<html><head><title>How Neural Vaults Work</title><meta property="og:site_name" content="Abyss Blog"><meta name="author" content="Ada"></head><body><nav>menu</nav><article><h1>How Neural Vaults Work</h1>${'<p>Neural vaults link memories together so agents can recall them. Each memory is a node and each link a synapse. </p>'.repeat(12)}</article></body></html>`); }
@@ -64,13 +68,15 @@ out({type:'result',subtype:'success',is_error:false,result:'Fixed the login bug 
   await new Promise((r) => site.listen(0, '127.0.0.1', r));
   const siteUrl = `http://127.0.0.1:${site.address().port}`;
   fs.writeFileSync(path.join(bin, 'fake-ytdlp.js'), `process.stdout.write(JSON.stringify({title:'Abyss Tutorial',uploader:'Space Channel',duration:754,description:'Learn to build a neural vault.',webpage_url:'https://video.example/watch?v=1',automatic_captions:{en:[{ext:'vtt',url:${JSON.stringify(siteUrl + '/captions.vtt')}}]}}));`);
-  const shim = (name, js) => { const f = path.join(bin, name); fs.writeFileSync(f, `#!/bin/sh\nexec "${process.execPath}" "${path.join(bin, js)}" "$@"\n`); fs.chmodSync(f, 0o755); return f; };
+  const shim = (name, js) => {
+    if (process.platform === 'win32') return path.join(bin, js);
+    const f = path.join(bin, name); fs.writeFileSync(f, `#!/bin/sh\nexec "${process.execPath}" "${path.join(bin, js)}" "$@"\n`); fs.chmodSync(f, 0o755); return f; };
   const fakeClaude = shim('claude', 'fake-claude.js');
-  const fakeYt = shim('yt-dlp', 'fake-ytdlp.js');
+  const fakeYt = path.join(bin, 'fake-ytdlp.js');
   Object.assign(ENV, { CORTEX_CLAUDE_BIN: fakeClaude, CORTEX_YTDLP: fakeYt });
 
   // ---------- start Cortex ----------
-  const srv = spawn(process.execPath, [CLI, 'start', '--vault', vault, '--port', String(port)], { stdio: ['ignore', 'pipe', 'pipe'], env: ENV });
+  const srv = spawn(process.execPath, [CLI, 'serve', '--vault', vault, '--port', String(port)], { stdio: ['ignore', 'pipe', 'pipe'], env: ENV });
   let srvOut = ''; srv.stdout.on('data', (d) => (srvOut += d)); srv.stderr.on('data', (d) => (srvOut += d));
   for (let i = 0; i < 60; i++) { try { if ((await fetch(base + '/api/state')).ok) break; } catch { /* starting */ } await sleep(200); }
 
@@ -78,7 +84,10 @@ out({type:'result',subtype:'success',is_error:false,result:'Fixed the login bug 
   const A = await J(await post('/api/items', { kind: 'project', title: 'Alpha App', instructions: 'Always write tests first. ALPHA-RULE.', folder: codeA }));
   const B = await J(await post('/api/items', { kind: 'project', title: 'Beta Site' }));
   assert.ok(fs.statSync(path.join(vault, 'notes', 'alpha-app')).isDirectory() && fs.statSync(path.join(vault, 'notes', 'beta-site')).isDirectory());
-  ok('each new project gets its own memory folder');
+  fs.writeFileSync(path.join(vault, 'projects', 'imported.md'), '# Imported\n');
+  assert.equal((await post('/api/rescan', {})).status, 200);
+  assert.ok(fs.statSync(path.join(vault, 'notes', 'imported')).isDirectory());
+  ok('each created or imported project gets its own memory folder');
   const c = mcp('codex');
   await c.ready;
   const ma = await c.tool('memory_write', { title: 'Alpha uses Postgres', content: 'The alpha app stores data in Postgres 16.', project: 'alpha-app' });
@@ -174,6 +183,7 @@ out({type:'result',subtype:'success',is_error:false,result:'Fixed the login bug 
   for (let i = 0; i < 40; i++) { await sleep(200); sess = (await J(await fetch(base + '/api/live'))).sessions.find((s) => s.id === run.id); if (sess && sess.status === 'done') break; }
   assert.equal(sess.status, 'done', JSON.stringify(sess));
   assert.equal(sess.claude_session, 'sess-123');
+  assert.deepEqual(sess.usage, { input: 20, output: 27, cachedInput: 5 });
   const call = JSON.parse(fs.readFileSync(path.join(tmp, 'claude-call.json'), 'utf8'));
   assert.ok(call.args.includes('-p') && call.args.includes('mcp__cortex__*') && call.args.includes('stream-json') && call.args.includes('--verbose'));
   assert.equal(call.cwd, codeA);
@@ -246,7 +256,7 @@ out({type:'result',subtype:'success',is_error:false,result:'Fixed the login bug 
   let list = await J(await fetch(base + '/api/skills'));
   assert.equal(list.find((x) => x.id === 'skills/my-skill').installed['claude-code'], 'yours');
   const clash = await post('/api/skills/install', { id: 'skills/my-skill', target: 'claude-code' });
-  assert.equal(clash.status, 500 >= clash.status ? clash.status : 400);
+  assert.equal(clash.status, 409);
   assert.ok(/never overwrites/.test((await J(clash)).error));
   const rm = await post('/api/skills/install', { id: 'skills/my-skill', target: 'claude-code', action: 'uninstall' });
   assert.ok(/will not remove/.test((await J(rm)).error));
@@ -261,7 +271,7 @@ out({type:'result',subtype:'success',is_error:false,result:'Fixed the login bug 
   assert.ok(!fs.existsSync(nsFile) && fs.existsSync(path.join(userSkill, 'SKILL.md')));
   const zipBuf = Buffer.from(await (await fetch(base + '/api/skills/zip?id=' + encodeURIComponent(ns.id))).arrayBuffer());
   fs.writeFileSync(path.join(tmp, 's.zip'), zipBuf);
-  const zl = execFileSync('unzip', ['-l', path.join(tmp, 's.zip')]).toString();
+  const zl = zipList(path.join(tmp, 's.zip'));
   assert.ok(zl.includes('release-notes/SKILL.md'));
   const skl = await c.tool('skill_list');
   assert.ok(skl.some((x) => x.name === 'release-notes') && skl.some((x) => x.name === 'my-skill'));
@@ -296,7 +306,7 @@ out({type:'result',subtype:'success',is_error:false,result:'Fixed the login bug 
   const restored = await J(await post('/api/history/restore', { id: n1.id, version: oldest }));
   assert.equal(restored.body.trim(), 'v1 text');
   const bk = await J(await post('/api/backups', {}));
-  const bl = execFileSync('unzip', ['-l', bk.file]).toString();
+  const bl = zipList(bk.file);
   assert.ok(bl.includes('notes/alpha-app/alpha-uses-postgres.md') && !bl.includes('.cortex/history'));
   const hl = await J(await fetch(base + '/api/health'));
   const ha = hl.find((x) => x.project === 'alpha-app');

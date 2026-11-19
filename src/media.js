@@ -181,7 +181,9 @@ async function viaYtDlp(url) {
   const bin = process.env.CORTEX_YTDLP || await which('yt-dlp');
   if (!bin) return null;
   await assertPublicUrl(url);
-  const json = await new Promise((resolve, reject) => execFile(bin, ['-J', '--skip-download', '--no-playlist', '--no-warnings', url], { timeout: 60000, maxBuffer: 64 * 1024 * 1024, windowsHide: true },
+  const args = ['-J', '--skip-download', '--no-playlist', '--no-warnings', url];
+  const nodeWrapper = bin === process.env.CORTEX_YTDLP && /\.js$/i.test(bin);
+  const json = await new Promise((resolve, reject) => execFile(nodeWrapper ? process.execPath : bin, nodeWrapper ? [bin, ...args] : args, { timeout: 60000, maxBuffer: 64 * 1024 * 1024, windowsHide: true },
     (e, out, err) => (e ? reject(new Error(`yt-dlp: ${String(err || e.message).trim().split('\n').pop()}`)) : resolve(out))));
   const info = JSON.parse(json);
   const tracks = [];

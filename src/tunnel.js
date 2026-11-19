@@ -144,6 +144,7 @@ class PublicLink {
   async start() {
     const target = this.active;
     const result = await target.start();
+    // Keep the existing link usable while Funnel waits for account approval.
     if (target === this.funnel && this.active === target && result.running && result.url) this.quick.stop();
     return this.status();
   }

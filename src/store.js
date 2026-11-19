@@ -63,7 +63,7 @@ class Store extends EventEmitter {
       if (e.name.startsWith('.') || e.name === 'node_modules') continue;
       const p = path.join(dir, e.name);
       if (e.isDirectory()) this.walk(p, out);
-      else if (e.name.toLowerCase().endsWith('.md')) out.push(p);
+      else if (e.isFile() && e.name.toLowerCase().endsWith('.md')) out.push(p);
     }
   }
 
@@ -93,6 +93,7 @@ class Store extends EventEmitter {
           const m = id.match(/^notes\/([^/]+)\/[^/]+$/);
           if (m && fs.existsSync(this.fileOf('projects/' + m[1]))) meta.project = m[1]; // a file dropped into a project folder belongs to it
         }
+        if (rec.kind === 'project' && /^projects\/[^/]+$/.test(id)) this.ensureProjectMemory(rec.slug);
         this.index(rec);
         this.items.set(id, rec);
         changed = true;
@@ -251,8 +252,8 @@ class Store extends EventEmitter {
     if (kind === 'task' && meta.status === 'done') meta.completed = now();
     meta.created = meta.updated = now();
     const rec = { id, kind, slug, meta, body: data.body ? String(data.body) : '', ctime: Date.now() };
+    if (kind === 'project') this.ensureProjectMemory(slug);
     this.write(rec);
-    if (kind === 'project') fs.mkdirSync(path.join(this.vault, 'notes', slug), { recursive: true }); // the project's own memory folder
     this.emit('change', { type: 'create', id, kind });
     return rec;
   }
@@ -260,6 +261,8 @@ class Store extends EventEmitter {
   // ---------- memory scopes ----------
   // Project memories live in notes/<project>/ and only apply to that project.
   // System memories live directly in notes/ and apply to every project.
+  ensureProjectMemory(slug) { fs.mkdirSync(path.join(this.vault, 'notes', slug), { recursive: true }); }
+
   dirFor(kind, project) { return kind === 'note' && project ? `notes/${project}` : DIRS[kind]; }
 
   freeSlug(dir, base) {

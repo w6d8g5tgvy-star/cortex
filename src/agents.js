@@ -109,6 +109,16 @@ const TOOLS = {
   codex: { label: 'Codex', agent: 'codex', env: 'CORTEX_CODEX_BIN', name: 'codex' },
 };
 
+function spawnAgent(bin, args, options) {
+  const win = process.platform === 'win32';
+  const nodeWrapper = /\.js$/i.test(bin);
+  const commandScript = win && /\.(?:cmd|bat)$/i.test(bin);
+  if (nodeWrapper) return spawn(process.execPath, [bin, ...args], options);
+  if (!commandScript) return spawn(bin, args, options);
+  const quoted = args.map((arg) => /[\s*]/.test(arg) ? '"' + arg + '"' : arg);
+  return spawn('"' + bin + '"', quoted, { ...options, shell: true });
+}
+
 class AgentRunner {
   constructor(store) { this.store = store; this.vault = store.vault; this.procs = new Map(); this.resolved = {}; }
 
@@ -131,15 +141,14 @@ class AgentRunner {
 
   /** Run a CLI briefly and collect its output (stdin closed straight away, so nothing waits for input). */
   runQuick(bin, args, cwd, timeoutMs) {
-    const win = process.platform === 'win32';
     return new Promise((resolve) => {
       let out = ''; let err = ''; let done = false;
-      const child = spawn(win ? `"${bin}"` : bin, win ? args.map((a) => (/[\s*"]/.test(a) ? `"${a.replace(/"/g, '')}"` : a)) : args, { cwd, shell: win, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+      const child = spawnAgent(bin, args, { cwd, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
       child.stdin.on('error', () => {}); child.stdin.end();
       child.stdout.on('data', (d) => { out += d; }); child.stderr.on('data', (d) => { err += d; });
       const t = setTimeout(() => { if (!done) { done = true; try { child.kill(); } catch { /* gone */ } resolve({ code: null, out, err, timedOut: true }); } }, timeoutMs);
       child.on('error', (e) => { if (!done) { done = true; clearTimeout(t); resolve({ code: -1, out, err: e.message }); } });
-      child.on('exit', (code) => { if (!done) { done = true; clearTimeout(t); resolve({ code, out, err }); } });
+      child.on('close', (code) => { if (!done) { done = true; clearTimeout(t); resolve({ code, out, err }); } });
     });
   }
 
@@ -197,7 +206,7 @@ class AgentRunner {
       if (resume) args.push('--resume', String(resume).replace(/[^\w-]/g, ''));
       if (['default', 'acceptEdits', 'plan', 'bypassPermissions'].includes(permission)) args.push('--permission-mode', permission);
     } else {
-      args = ['exec', '--skip-git-repo-check'];
+      args = ['exec', '--skip-git-repo-check', '--json'];
       if (permission === 'acceptEdits') args.push('--full-auto');
       if (permission === 'bypassPermissions') args.push('--dangerously-bypass-approvals-and-sandbox');
       args.push('-');
@@ -206,8 +215,7 @@ class AgentRunner {
     if (taskRec && taskRec.meta.status !== 'done') this.store.update(taskRec.id, { status: 'doing', assignee: t.agent });
     const win = process.platform === 'win32';
     // The prompt goes through stdin, never through a shell command line.
-    const spawnArgs = win ? args.map((a) => (/[\s*]/.test(a) ? `"${a}"` : a)) : args; // cmd shell needs quoting; args here never contain user text
-    const child = spawn(win ? `"${this.bin(tool)}"` : this.bin(tool), spawnArgs, { cwd, env: { ...process.env, CORTEX_RUN_ID: id }, shell: win, detached: !win, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawnAgent(this.bin(tool), args, { cwd, env: { ...process.env, CORTEX_RUN_ID: id }, detached: !win, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     const rec = { child, id, tool, stderr: [], ended: false, stopped: false, project: b.project, task: b.task, prompt: prompt || title, agent: t.agent };
     this.procs.set(id, rec);
     child.stdin.on('error', () => {});
@@ -227,12 +235,16 @@ class AgentRunner {
   }
 
   onLine(rec, line, hooks) {
-    if (rec.tool !== 'claude') {
-      sessions.upsert(this.vault, rec.id, { step: line.slice(0, 200) }, { kind: 'step', text: line.slice(0, 500) });
-      return;
-    }
     let ev;
     try { ev = JSON.parse(line); } catch { return; }
+    if (rec.tool === 'codex') {
+      if (ev.type === 'turn.completed') this.recordUsage(rec, ev.usage);
+      if (ev.type === 'item.completed' && ev.item?.type === 'agent_message' && typeof ev.item.text === 'string') {
+        rec.summary = ev.item.text;
+        sessions.upsert(this.vault, rec.id, { step: rec.summary.slice(0, 200) }, { kind: 'say', text: rec.summary.slice(0, 500) });
+      }
+      return;
+    }
     if (ev.type === 'system' && ev.subtype === 'init') {
       sessions.upsert(this.vault, rec.id, { claude_session: ev.session_id, model: ev.model }, { kind: 'status', text: `Started${ev.model ? ` (${ev.model})` : ''}` });
     } else if (ev.type === 'assistant' && ev.message && Array.isArray(ev.message.content)) {
@@ -247,7 +259,23 @@ class AgentRunner {
       }
     } else if (ev.type === 'result') {
       rec.result = ev;
+      this.recordUsage(rec, ev.usage);
     }
+  }
+
+  recordUsage(rec, raw) {
+    const valid = (n) => Number.isSafeInteger(n) && n >= 0;
+    if (!raw || !valid(raw.input_tokens) || !valid(raw.output_tokens)) return;
+    const count = (n) => valid(n) ? n : 0;
+    const usage = rec.usage || { input: 0, output: 0, cachedInput: 0 };
+    usage.input += raw.input_tokens;
+    usage.output += raw.output_tokens;
+    if (rec.tool === 'claude') {
+      usage.input += count(raw.cache_creation_input_tokens) + count(raw.cache_read_input_tokens);
+      usage.cachedInput += count(raw.cache_read_input_tokens);
+    } else usage.cachedInput += count(raw.cached_input_tokens);
+    rec.usage = usage;
+    sessions.upsert(this.vault, rec.id, { usage });
   }
 
   finish(rec, code, error) {
@@ -268,7 +296,7 @@ class AgentRunner {
       const summary = String(r.result || '').trim();
       sessions.upsert(this.vault, rec.id, { status: 'done', step: summary ? summary.replace(/\s+/g, ' ').slice(0, 200) : 'Finished', result: summary.slice(0, 4000), cost_usd: r.total_cost_usd, turns: r.num_turns }, { kind: 'status', text: `✓ Finished${r.num_turns ? ` in ${r.num_turns} turns` : ''}` });
     } else if (code === 0 && !error && rec.tool !== 'claude') {
-      sessions.upsert(this.vault, rec.id, { status: 'done', step: 'Finished' }, { kind: 'status', text: '✓ Finished' });
+      sessions.upsert(this.vault, rec.id, { status: 'done', step: 'Finished', result: rec.summary?.slice(0, 4000) }, { kind: 'status', text: '✓ Finished' });
     } else {
       const why = error || (r && r.result) || rec.stderr.slice(-3).join(' ') || `exited with code ${code}`;
       sessions.upsert(this.vault, rec.id, { status: 'error', step: String(why).slice(0, 200) }, { kind: 'status', text: `✗ ${String(why).slice(0, 400)}` });
@@ -293,8 +321,15 @@ class AgentRunner {
 /** Is `dir` inside one of the allowed folders? */
 function folderAllowed(dir, allowed) {
   if (!dir) return false;
-  const d = path.resolve(dir).toLowerCase();
-  return (allowed || []).some((a) => { const r = path.resolve(a).toLowerCase(); return d === r || d.startsWith(r + path.sep); });
+  const realPath = (p) => { try { return fs.realpathSync.native(p); } catch { return null; } };
+  const candidate = realPath(dir);
+  if (!candidate) return false;
+  return (allowed || []).some((folder) => {
+    const root = realPath(folder);
+    if (!root) return false;
+    const relative = path.relative(root, candidate);
+    return relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative);
+  });
 }
 
 module.exports = { family, createCommand, listCommands, claimCommands, completeCommand, deleteCommand, commandView, AgentRunner, folderAllowed, TOOLS };

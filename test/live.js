@@ -31,7 +31,9 @@ async function waitUp(base, ms = 15000) {
   throw new Error('server did not start');
 }
 function hook(event) {
-  const r = spawnSync(process.execPath, [CLI, 'hook', '--vault', vault], { input: JSON.stringify(event), encoding: 'utf8' });
+  const env = { ...process.env };
+  delete env.CORTEX_RUN_ID;
+  const r = spawnSync(process.execPath, [CLI, 'hook', '--vault', vault], { input: JSON.stringify(event), encoding: 'utf8', env });
   assert.equal(r.status, 0);
   return r.stdout ? JSON.parse(r.stdout) : null;
 }
