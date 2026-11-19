@@ -82,12 +82,13 @@ function briefing(store, sinceMs = Date.now() - DAY) {
   const dueSoon = open.filter((t) => t.meta.due && t.meta.due >= today && t.meta.due <= soon);
   const blocked = open.filter((t) => t.meta.status === 'blocked');
   const live = sessions.list(store.vault);
+  for (const s of live) if (s.updated >= since && s.title) (byAgent[s.agent] = byAgent[s.agent] || []).push({ summary: `${s.title}${s.status === 'working' ? ' (working now)' : ''}` });
   const needsYou = live.filter((s) => s.status === 'needs-you' && !s.archived);
   const mindDone = store.list('mind').filter((m) => m.meta.status === 'done' && (m.meta.processed || m.updated) >= since);
   const mindQueued = store.list('mind').filter((m) => m.meta.status === 'queued');
   const lines = [`# Daily briefing · ${today}`, ''];
   const agentNames = Object.keys(byAgent);
-  lines.push(`**Since ${new Date(sinceMs).toLocaleString()}:** ${act.length} actions by ${agentNames.length} agent${agentNames.length === 1 ? '' : 's'}, ${done.length} task${done.length === 1 ? '' : 's'} completed, ${newMems.length} new memor${newMems.length === 1 ? 'y' : 'ies'}.`, '');
+  lines.push(`**Since ${new Date(sinceMs).toLocaleString()}:** ${agentNames.length} agent${agentNames.length === 1 ? '' : 's'} active, ${act.length} recorded actions, ${done.length} task${done.length === 1 ? '' : 's'} completed, ${newMems.length} new memor${newMems.length === 1 ? 'y' : 'ies'}.`, '');
   if (needsYou.length || overdue.length || blocked.length) {
     lines.push('## Needs you');
     for (const s of needsYou) lines.push(`- ${s.agent}: ${s.step || s.title}`);

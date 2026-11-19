@@ -70,13 +70,15 @@ There are two ways for an agent to connect:
 
 Both modes read and write the same vault, so the dashboard updates live whichever one an agent uses.
 
-**Claude Code**
+**Claude Code** (verified against the Claude Code docs)
 
 ```bash
 claude mcp add --scope user cortex -- node /ABSOLUTE/PATH/TO/cortex/bin/cortex.js mcp
 ```
 
-**Claude Desktop:** Settings → Developer → Edit Config. Add the following, then restart Claude:
+> **Windows:** run that line in **Command Prompt** (`cmd`). In PowerShell, put `cmd /c ` in front of it. The JSON blocks below are **file contents**: paste them into the named config file, never into a terminal. Simplest of all, run `node bin\cortex.js setup` from the Cortex folder, which connects every AI app it finds.
+
+**Claude Desktop** (verified): Settings → Developer → Edit Config opens `claude_desktop_config.json`. Merge this in, save, and restart Claude:
 
 ```json
 {
@@ -86,34 +88,94 @@ claude mcp add --scope user cortex -- node /ABSOLUTE/PATH/TO/cortex/bin/cortex.j
 }
 ```
 
-**Cursor:** `~/.cursor/mcp.json`
+**Cursor** (`~/.cursor/mcp.json`), **Windsurf** (`~/.codeium/windsurf/mcp_config.json`), **VS Code** (`.vscode/mcp.json`) and **Codex** (`~/.codex/config.toml`): the Agents tab shows the exact block for each. I couldn't reach those apps' docs from where Cortex was built, so those are marked "not verified yet" in the app.
 
-```json
-{ "mcpServers": { "cortex": { "url": "http://127.0.0.1:7777/mcp" } } }
+**Prompt for your agents.** Paste this into `CLAUDE.md`, ChatGPT custom instructions, or a project's instructions. It's also in Settings → Connect AI apps and in `cortex config`:
+
+```
+You have access to Cortex, my personal project manager and long-term memory, through the "cortex" MCP server.
+Start every task with cortex_start / project_brief, search memory before asking me, keep tasks current,
+save what you learn with memory_write, report progress with live_update, use my skills (skill_list / skill_get),
+and finish with activity_log.
 ```
 
-**VS Code:** `.vscode/mcp.json`
-
-```json
-{ "servers": { "cortex": { "type": "http", "url": "http://127.0.0.1:7777/mcp" } } }
-```
-
-> On Windows, use double backslashes in JSON paths (`C:\\Users\\you\\cortex\\bin\\cortex.js`) or forward slashes. If `node` is not found, use the full path to `node.exe`. The Agents tab fills these in for you.
-
-**Tip:** add this line to your agent's instructions (for example `CLAUDE.md`):
-
-> Use the Cortex MCP server as your long-term memory and task board. Call `cortex_start` at the beginning of each task, save decisions and learnings with `memory_write`, and keep tasks updated.
-
-### Tools agents get
+### Tools agents get (30)
 
 | Tool | What it does |
 |------|--------------|
-| `cortex_start` | Loads context: projects, open tasks, pinned and recent memories, recent activity |
-| `project_list` / `project_create` / `project_update` | Manage projects |
-| `task_list` / `task_get` / `task_create` / `task_update` | Manage the board (status, priority, assignee, due date, progress notes) |
-| `memory_write` / `memory_update` / `memory_get` / `memory_delete` | Create, append to, read and delete Markdown notes |
-| `memory_search` / `memory_list` / `memory_links` | Full-text search, filtered lists, and graph neighbours (links and backlinks) |
-| `activity_log` / `activity_list` | Record and read what agents did |
+| `cortex_start` / `project_brief` | Load the user's instructions, the project's instructions, project + system memories, open tasks, recent agent work |
+| `project_*` / `task_*` | Manage projects (incl. agent instructions and code folder) and the board |
+| `memory_write` / `memory_update` / `memory_get` / `memory_delete` | Notes: with a project → `notes/<project>/`, without → system memory |
+| `memory_search` / `memory_list` / `memory_links` | Ranked search (project + system scope), lists, graph neighbours |
+| `live_update` / `live_screenshot` / `messages_check` | Report progress live, share screenshots, receive your messages |
+| `command_complete` | Report back on a command you sent from Cortex |
+| `mind_list` / `mind_add` / `mind_fetch` / `mind_complete` | Work through videos to watch, articles to read and articles to write |
+| `skill_list` / `skill_get` / `skill_save` | Your skills library |
+| `activity_log` / `activity_list` / `daily_briefing` | Record and review what happened |
+
+## Memory: project vs system
+
+| | Lives in | Given to agents |
+|---|---|---|
+| **Project memories** | `notes/<project>/` (every project gets its own folder) | Only when working on that project |
+| **System memories** | `notes/` (no project) | On every project |
+
+Changing a memory's project moves its file. A file you drop into a project folder (for example from Obsidian) belongs to that project. The Memory vault and the Neural map both have **Project memories / System memories** tabs.
+
+## How Cortex makes agents record their work
+
+- **The agent journal is guaranteed.** Cortex writes `notes/<project>/agent-journal.md` itself, so it doesn't rely on the agent. It records:
+  - every Claude Code turn (what was asked, files changed, commands run, whether memory was saved, and the outcome);
+  - every run started from Cortex;
+  - every action any connected agent takes on the project.
+- **Claude Code reads Cortex automatically.** At session start a hook injects the project brief, worked out from the folder Claude is in (set a project's *code folder*). Related memories are added to each prompt.
+- **The save gate.** If Claude changed things but saved nothing, its first attempt to finish is blocked with a request to save what it learned.
+- **Knowledge health** on the Home page shows, per project, whether agents are recording and saving.
+- **Limits:** other apps (ChatGPT, Cursor…) still get journaled and receive the setup prompt, but Cortex can only enforce reading and saving through Claude Code's hooks. No tool can force a model to actually think with what it's given.
+
+## Command agents (from the computer or your phone)
+
+- **Start an agent** (Agents tab, or *Send to an agent* on any task or project). This runs Claude Code (`claude -p`) or Codex in an allowed folder.
+  - The agent receives the full Cortex brief; you can preview it first.
+  - Its progress streams to Live and its result lands in the journal and the task.
+  - You can stop it, or **continue** a finished Claude Code chat.
+  - Turn it on in Settings → Agent control, and list the folders agents may work in.
+- **Send a command** to any connected agent. It's delivered the next time the agent checks in, and the result comes back.
+- **Phone approvals:** turn on *Approve permission requests from Cortex*, and Claude Code's permission prompts appear on Live and your phone with Allow and Deny buttons.
+- **Chats & sessions:** every agent conversation is listed with search, project, agent and status filters, plus rename, tag, pin and archive.
+
+## Mind
+
+Paste a video link, an article link, or a topic you want written.
+
+- **Videos:** Cortex fetches the title, channel, description and transcript. Install [yt-dlp](https://github.com/yt-dlp/yt-dlp) for reliable transcripts from most sites. AI can't literally watch video, so the transcript is what it reads.
+- **Articles:** Cortex fetches the readable text.
+- **Summaries:** an agent summarises the item, and the summary becomes a linked memory.
+- **Safety:** links to your own computer or home network are refused.
+
+## Skills
+
+- **Write once, use everywhere.** Write a skill once, then:
+  - **Add** it to Claude Code or Codex (written to `~/.claude/skills/<name>/SKILL.md`);
+  - download a **.zip for Claude.ai** (Customize → Skills → + → Create skill → Upload a skill);
+  - **copy instructions for ChatGPT**.
+- **Add-only.** Cortex marks the skills it adds and never overwrites or removes skills you made yourself. Your existing Claude Code skills can be imported as read-only reference copies.
+- **Shared with agents.** Every connected agent can browse skills with `skill_list` / `skill_get`.
+
+## Connect cloud apps (claude.ai, ChatGPT)
+
+- **Getting a public address.** Cloud apps need a public https address. In Settings → Connect AI apps, *Create public link* starts a free Cloudflare quick tunnel (needs [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)).
+- **claude.ai** (verified against Claude's help pages): Customize → Connectors → + Add → Add custom connector → paste the secret connector URL → *No sign in*.
+- **ChatGPT:** add the same URL as a developer-mode connector. Its exact menus weren't verifiable from here.
+- **Keep the link secret.** It gives full access to your vault. *New secret link* invalidates the old one.
+
+## More
+
+- **Daily briefing** on Home: what agents did, what was completed, what needs you. Save it as a memory with one click.
+- **Memory gardener** (`/api/garden`, or ask an agent): finds duplicates, orphans and stale notes. The agent writes proposals; nothing is changed without you.
+- **Better search:** ranked search that understands word variants (*deploying* finds *deployment*). Optional meaning-based search through a local [Ollama](https://ollama.com) model (`ollama pull nomic-embed-text`).
+- **Templates:** Software, Research, Content, Minecraft mod, Personal. Each comes with instructions, starter tasks and project memories.
+- **History and backups:** every note keeps its last 30 versions (History button in the editor), and a daily vault zip goes to `.cortex/backups` (last 14 kept).
 
 ---
 
@@ -219,6 +281,7 @@ You can also set these with environment variables: `CORTEX_VAULT`, `CORTEX_PORT`
 ## Test
 
 ```bash
-npm test      # end-to-end: MCP over stdio + HTTP, REST API, file sync, phone pairing,
-              # live sessions, Claude Code hooks, screen capture, update + rollback
+npm test      # 41 end-to-end checks: MCP (stdio + HTTP), REST API, file sync, phone pairing, live sessions,
+              # hooks (brief, recall, save gate, approvals), agent launcher, commands, memory scopes,
+              # journal, Mind, add-only skills, connector, templates, history, backups, search, updates
 ```

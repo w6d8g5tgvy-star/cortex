@@ -485,7 +485,7 @@ textarea.input { resize: vertical; line-height: 1.55; }
   #nav::-webkit-scrollbar { display: none; }
   .dock-btn { flex-direction: column; gap: 2px; padding: 6px 4px; min-width: 60px; flex: 1; justify-content: center; align-items: center; font-size: 10.5px; border-radius: 14px; }
   .dock-btn.active::before { left: 30%; right: 30%; top: auto; bottom: 0; width: auto; height: 2px; }
-  .dock-btn span:not(.count) { display: block; }
+  .dock-btn span:not(.count) { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 64px; }
   .dock-btn .count { position: absolute; top: 2px; right: 8px; margin: 0; font-size: 9.5px; padding: 0 5px; background: var(--violet); color: #fff; border: 0; }
   #shell { padding-bottom: calc(78px + env(safe-area-inset-bottom)); }
   #topbar { padding: env(safe-area-inset-top) 14px 0; height: calc(58px + env(safe-area-inset-top)); gap: 8px; }
