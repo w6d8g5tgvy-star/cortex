@@ -1521,17 +1521,34 @@ function showRestarting() {
 }
 
 // ---------- SETTINGS ----------
+// Public link chooser: permanent (Tailscale Funnel) vs quick (Cloudflare, changes on every restart).
+function publicLinkHtml(st, { compact = false } = {}) {
+  const c = st.connector, tn = c.tunnel || {};
+  const ts = c.provider === 'tailscale';
+  const status = tn.running && tn.url
+    ? `<span class="chip ok">${ts ? '✓ Permanent link on' : 'Quick link on'}</span>`
+    : tn.starting ? '<span class="chip">Starting…</span>' : '<span class="chip">Off</span>';
+  const warn = !ts && tn.url ? `<p class="small" style="color:var(--warn,#f5b84a);margin:6px 0 0">This quick link changes every time Cortex restarts or updates, and saved connectors then stop working. Switch to the permanent link to fix that for good.</p>` : '';
+  const err = tn.error ? `<p class="small" style="color:var(--bad);margin:6px 0 0">${esc(tn.error)}</p>` : '';
+  const enable = tn.enableUrl ? `<p class="small" style="margin:6px 0 0"><a class="btn sm primary" href="${esc(tn.enableUrl)}" target="_blank" rel="noopener">Turn on Funnel in Tailscale ↗</a> then <button class="btn sm" data-tunnel="check">Check again</button></p>` : '';
+  const tsBtn = c.tailscale
+    ? `<button class="btn sm ${ts ? '' : 'primary'}" data-tunnel="start" data-provider="tailscale">${ts && tn.running ? 'Re-check permanent link' : 'Use permanent link (Tailscale)'}</button>`
+    : `<a class="btn sm" href="https://tailscale.com/download" target="_blank" rel="noopener">Install Tailscale for a permanent link ↗</a>`;
+  const cfBtn = c.cloudflared
+    ? `<button class="btn sm ghost" data-tunnel="start" data-provider="cloudflare">${!ts && tn.running ? 'Restart quick link' : 'Use quick link (Cloudflare)'}</button>`
+    : '';
+  const off = tn.running ? '<button class="btn sm ghost" data-tunnel="stop">Turn off</button>' : '';
+  return `<div class="row" style="flex-wrap:wrap;gap:8px;margin-top:${compact ? 6 : 0}px">${status}${tsBtn}${cfBtn}${off}</div>${warn}${err}${enable}`;
+}
 // ---------- "Link Claude & ChatGPT" guided panel ----------
 function linkAppsHtml(st, c) {
   const tn = st.connector.tunnel;
   const url = tn.url ? `${tn.url}/mcp/${st.connector.token}` : '';
   const ins = st.instructions || {};
   const done = (ok) => `<span class="chip ${ok ? 'ok' : ''}">${ok ? '✓ done' : 'to do'}</span>`;
-  const linkStep = url
+  const linkStep = (url
     ? `<div class="code"><pre class="wrap" style="font-size:11px">${esc(url)}</pre><button class="btn sm copy" data-copy-text="${esc(url)}">${icon('i-copy')}</button></div>`
-    : st.connector.cloudflared
-      ? `<button class="btn sm primary" data-tunnel="start">Create my connector link</button>`
-      : `<span class="small">First install <a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/" target="_blank" rel="noopener">cloudflared</a> (free), then reload this page.</span>`;
+    : '') + publicLinkHtml(st, { compact: !!url });
   const step = (n, title, body) => `<div class="row" style="align-items:flex-start;gap:12px;margin:10px 0"><span class="av" style="background:var(--aurora);width:26px;height:26px;border-radius:8px;font-size:12px;flex:none">${n}</span><div style="flex:1;min-width:0"><b>${title}</b><div class="small muted" style="margin-top:3px">${body}</div></div></div>`;
   const card = (name, sub, connectorHtml, instrHtml) => `<div class="panel" style="flex:1;min-width:300px"><h3>${name} <span class="small muted" style="text-transform:none;letter-spacing:0;font-weight:400">${sub}</span></h3>${connectorHtml}${instrHtml}</div>`;
   const pc = ins['claude-code'] === 'installed' || ins.codex === 'installed';
@@ -1549,7 +1566,7 @@ function linkAppsHtml(st, c) {
         step(2, 'Add it to ChatGPT', `<a class="btn sm" href="https://chatgpt.com/" target="_blank" rel="noopener">Open ChatGPT ↗</a> then Settings → <b>Apps &amp; Connectors</b>, turn on <b>developer mode</b>, and create a connector with the link. Needs a plan that allows custom connectors. These menus couldn't be checked against ChatGPT's docs.`),
         step(3, 'Make ChatGPT always use Cortex', `<button class="btn sm" data-copy-prompt>Copy instructions</button> then Settings → <b>Personalization → Custom instructions</b>, or a ChatGPT <b>Project's instructions</b>.`))}
     </div>
-    <p class="small muted" style="margin:8px 0 0">The free link changes whenever the tunnel restarts. If an app stops reaching Cortex, come back here and paste the new link.</p>
+    <p class="small muted" style="margin:8px 0 0">${st.connector.provider === 'tailscale' ? 'Your permanent link never changes: add it once per app.' : 'The quick link changes whenever Cortex restarts or updates. Use the permanent link (Tailscale) so you only add it once.'} Keep just <b>one</b> Cortex connector per app and delete old ones that point at dead links.</p>
   </div>`;
 }
 const toggleRow = (id, on, title, desc, disabled) => `<label class="toggle-row ${disabled ? 'disabled' : ''}"><div><b>${title}</b><div class="small muted">${desc}</div></div><input type="checkbox" class="switch" data-setting="${id}" ${on ? 'checked' : ''} ${disabled ? 'disabled' : ''}></label>`;
@@ -1636,12 +1653,12 @@ async function renderSettings() {
       <div class="panel"><h3>${icon('i-plug')} Connect AI apps</h3>
         ${L ? `<div class="field"><label>Prompt for your AI agents</label><div class="code"><pre class="wrap" style="max-height:160px">${esc(c.agentPrompt)}</pre><button class="btn sm copy" data-copy-prompt>${icon('i-copy')}</button></div><span class="small muted">Paste into CLAUDE.md, ChatGPT custom instructions, or a project's instructions so agents work through Cortex.</span></div>
         <h3 style="margin-top:18px">Cloud apps (claude.ai, ChatGPT)</h3>
-        <p class="small" style="margin-top:-6px">Cloud apps can only reach a public <b>https</b> address. Cortex can open one through a free Cloudflare tunnel${st.connector.cloudflared ? '' : ' (install <code>cloudflared</code> first: <a href="https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/" target="_blank" rel="noopener">download</a>)'}.</p>
-        <div class="row" style="flex-wrap:wrap;gap:8px">${st.connector.tunnel.running ? `<span class="chip ok">Public link on</span><button class="btn sm" id="tn-stop">Turn off</button>` : `<button class="btn sm primary" id="tn-start" ${st.connector.cloudflared ? '' : 'disabled'}>Create public link</button>`}<button class="btn sm ghost danger" id="cn-rotate">New secret link</button></div>
-        ${st.connector.tunnel.error ? `<p class="small" style="color:var(--bad)">${esc(st.connector.tunnel.error)}</p>` : ''}
+        <p class="small" style="margin-top:-6px">Cloud apps can only reach a public <b>https</b> address. The <b>permanent link</b> (free Tailscale Funnel) never changes. The <b>quick link</b> (Cloudflare, no account) gets a new address on every restart.</p>
+        ${publicLinkHtml(st)}
+        <div class="row" style="margin-top:8px"><button class="btn sm ghost danger" id="cn-rotate">New secret link</button></div>
         ${st.connector.tunnel.url ? `<div class="field" style="margin-top:10px"><label>Connector URL (keep it secret: it gives full access)</label><div class="code"><pre class="wrap">${esc(st.connector.tunnel.url + '/mcp/' + st.connector.token)}</pre><button class="btn sm copy" data-copy-text="${esc(st.connector.tunnel.url + '/mcp/' + st.connector.token)}">${icon('i-copy')}</button></div>
           <ul class="small" style="padding-left:18px;line-height:1.8"><li><b>claude.ai</b>: Customize → Connectors → + Add → Add custom connector → paste the URL → choose <i>No sign in</i>.</li><li><b>ChatGPT</b>: turn on developer mode for connectors, then add a connector with this URL. ChatGPT's menus were not checked against its docs from here.</li></ul>
-          <p class="small muted">Quick-tunnel links change each time the tunnel restarts. Paste the new one when that happens.</p></div>` : ''}` : '<p class="small muted">Set this up on your computer.</p>'}
+          <p class="small muted">${st.connector.provider === 'tailscale' ? 'This link is permanent. Add it once; it keeps working through restarts, updates and reboots.' : 'Quick-tunnel links change each time the tunnel restarts. Paste the new one when that happens.'} Have only <b>one</b> Cortex connector in each app: delete old ones that point at dead links.</p></div>` : ''}` : '<p class="small muted">Set this up on your computer.</p>'}
       </div>
       <div class="panel"><h3>${icon('i-search')} Search &amp; backups</h3>
         ${bk ? `<p class="small" style="margin-top:0"><b>Search by meaning:</b> ${bk.semantic.available ? `<span class="chip ok">on</span> ${bk.semantic.indexed} items indexed with ${esc(bk.semantic.model)} (local Ollama)` : `<span class="chip">keyword search</span> ${esc(bk.semantic.reason || '')}`}</p>
@@ -1697,10 +1714,14 @@ async function renderSettings() {
   on('ag-save', async () => {
     try { await api('/api/settings', { method: 'POST', body: { agents: { folders: $('#ag-folders').value, permission: $('#ag-perm').value, maxMinutes: $('#ag-max').value, instructions: $('#ag-ins').value } } }); toast('Agent settings saved'); renderSettings(); } catch (e) { fail(e); }
   });
-  on('tn-start', async (e) => { e.target.disabled = true; e.target.textContent = 'Creating…'; await api('/api/tunnel', { method: 'POST', body: { action: 'start' } }).catch(fail); renderSettings(); });
-  on('tn-stop', async () => { await api('/api/tunnel', { method: 'POST', body: { action: 'stop' } }).catch(fail); renderSettings(); });
   on('cn-rotate', async () => { if (!confirm('Make a new secret connector link? Apps using the old link will stop working.')) return; await api('/api/settings', { method: 'POST', body: { rotateConnector: true } }).catch(fail); renderSettings(); });
-  $$('[data-tunnel]').forEach((b) => (b.onclick = async () => { b.disabled = true; b.textContent = 'Creating… (up to 30s)'; await api('/api/tunnel', { method: 'POST', body: { action: 'start' } }).catch(fail); renderSettings(); }));
+  $$('[data-tunnel]').forEach((b) => (b.onclick = async () => {
+    const action = b.dataset.tunnel;
+    b.disabled = true; b.textContent = action === 'start' ? 'Working… (up to 30s)' : action === 'check' ? 'Checking…' : 'Turning off…';
+    // errors (e.g. "Funnel not turned on yet") are shown in the panel itself
+    await api('/api/tunnel', { method: 'POST', body: { action, provider: b.dataset.provider } }).catch(() => {});
+    renderSettings();
+  }));
   $$('[data-instr]').forEach((b) => (b.onclick = async () => {
     try {
       const r = await api('/api/instructions', { method: 'POST', body: { action: b.dataset.instr } });

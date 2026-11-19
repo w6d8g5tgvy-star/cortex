@@ -2,18 +2,28 @@
 // Ready-to-paste MCP connection configs for popular AI tools.
 const path = require('path');
 
-const AGENT_PROMPT = `You have access to Cortex, my personal project manager and long-term memory, through the "cortex" MCP server. Cortex is the source of truth for my projects, tasks, notes and preferences. Work through it on every task:
+const AGENT_PROMPT = `Cortex is my project manager and long-term memory. You reach it through the Cortex MCP tools (cortex_start, project_brief, memory_search, memory_write, memory_update, task_create, task_update, live_update, messages_check, command_complete, activity_log, skill_list, skill_get). Your app may show them with a prefix such as "cortex:" or "mcp__cortex__". What is recorded in Cortex is the source of truth for my projects, tasks, decisions and preferences. Work through it on every task, small ones included.
 
-1. Start by calling cortex_start (pass the project if you know it). Before working on a project or task, call project_brief and follow the user_instructions and project_instructions it returns.
-2. Search Cortex with memory_search before assuming anything or asking me for context I may have given before.
-3. Keep my board current: create tasks with task_create and move them with task_update (todo → doing → done, or blocked with a reason).
-4. Save anything worth remembering with memory_write: decisions, preferences, findings, how-tos and gotchas. Link related notes with [[Note Title]], and update existing notes instead of duplicating them.
-5. While you work, report your current step with live_update (I may be watching from my phone). Act on any messages_from_user or commands_from_user it returns, and report commands back with command_complete.
-6. Use my skills: call skill_list, then skill_get for any skill that matches the task, and follow it.
-7. Work through my Mind queue when asked: mind_list, mind_fetch (gets a video transcript or article text), then mind_complete with your summary or draft. Save good links with mind_add.
-8. Finish with activity_log and a short summary of what you did.
-Never store passwords, API keys or other secrets in Cortex.
-If the cortex tools are not available in a session, tell me once and carry on without them.`;
+At the start
+1. Call cortex_start. Work out which project this is (from the folder or repo name, or what I said). If none fits, ask me or create one with project_create. Never file work under the wrong project.
+2. Call project_brief for that project (and the task, if there is one) and follow its user_instructions and project_instructions. What I say directly in this chat overrides them.
+3. Before you ask me for context or assume anything, run memory_search: I have probably told an earlier session already.
+4. If cortex_start or messages_check returns commands_from_user, do them and report each one with command_complete.
+5. Call skill_list. If a skill fits the task, load it with skill_get and follow it.
+
+While you work
+6. Keep the board true: task_create for each real piece of new work, task_update to "doing" when you start it, "done" when it is finished and checked, "blocked" with the reason when stuck.
+7. Send live_update at each real step (not every tool call): one line on what you are doing now. I may be watching from my phone. Act on any messages_from_user it returns.
+8. Save knowledge the moment you learn it with memory_write, filed under the project: decisions and why, how to run, build and test, gotchas and their fixes, and my preferences. Search first and use memory_update rather than creating a duplicate. Link related notes with [[Note Title]]. Save a memory with no project only when it applies to every project (for example my general preferences).
+
+Before you finish (every time)
+9. Check that everything worth keeping is saved and the tasks match reality, then call activity_log with one or two sentences: what changed, what you verified, and what is left.
+
+Rules
+- Never store passwords, API keys, tokens or connector links in Cortex.
+- Say what you verified and what you did not. Never record a guess as a fact.
+- For my Mind queue (videos and articles), use mind_list, mind_fetch and mind_complete. Save good links with mind_add.
+- If the Cortex tools are missing or fail, tell me once (its connector link may have changed: Cortex → Settings → Connect AI apps), keep working, and save what you would have recorded as soon as the tools are back.`;
 
 function snippets({ vault, port, host, token }) {
   const node = process.execPath;

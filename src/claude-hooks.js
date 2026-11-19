@@ -16,7 +16,22 @@ const MATCHER = { PostToolUse: '*' };
 const MARK = 'cortex.js" hook';
 
 const q = (s) => `"${s}"`;
-const hookCommand = (vault) => `${q(process.execPath)} ${q(CLI)} hook --vault ${q(vault)}`;
+// Claude Code runs hook commands through a shell: Git Bash on Windows when installed, otherwise PowerShell.
+// PowerShell can't parse a line that STARTS with a quoted path ("C:\Program Files\nodejs\node.exe" …
+// → "Unexpected token"), so on Windows start with a bare program name, which bash, cmd and PowerShell
+// all accept.
+function nodeOnPath() {
+  const dirs = String(process.env.PATH || process.env.Path || '').split(path.delimiter).filter(Boolean);
+  const want = path.dirname(process.execPath).toLowerCase().replace(/[\\/]+$/, '');
+  return dirs.some((d) => path.resolve(d).toLowerCase().replace(/[\\/]+$/, '') === want);
+}
+function nodeForShell() {
+  if (process.platform !== 'win32') return q(process.execPath);
+  if (!/\s/.test(process.execPath)) return process.execPath;
+  if (nodeOnPath()) return 'node';
+  return `& ${q(process.execPath)}`; // PowerShell call operator (no Git Bash on this PC)
+}
+const hookCommand = (vault) => `${nodeForShell()} ${q(CLI)} hook --vault ${q(vault)}`;
 
 function readSettings() {
   try { return JSON.parse(fs.readFileSync(SETTINGS, 'utf8')); } catch (e) { if (e.code === 'ENOENT') return {}; throw new Error(`Could not parse ${SETTINGS}: ${e.message}`); }
@@ -62,6 +77,21 @@ function install({ vault }) {
     }
   } catch { /* optional */ }
   return { ok: true, ...status(), backup: SETTINGS + '.cortex-backup' };
+}
+
+// Re-write our hooks if they are missing events or use an old command line (e.g. the pre-1.2.3 form that
+// PowerShell can't run, or a moved vault/install folder). Never touches the user's own hooks.
+function repair({ vault }) {
+  let cfg;
+  try { cfg = readSettings(); } catch { return { repaired: false }; }
+  const ours = [];
+  for (const [ev, groups] of Object.entries(cfg.hooks || {})) for (const g of groups || []) for (const h of g.hooks || []) if (isOurs(h)) ours.push([ev, h.command]);
+  if (!ours.length) return { repaired: false };
+  const want = hookCommand(vault);
+  const events = new Set(ours.map(([ev]) => ev));
+  if (ours.every(([, c]) => c === want) && Object.keys(EVENTS).every((e) => events.has(e))) return { repaired: false };
+  install({ vault });
+  return { repaired: true };
 }
 
 function uninstall() {
@@ -243,4 +273,4 @@ async function runHook(input, vault) {
   return null;
 }
 
-module.exports = { install, uninstall, status, runHook, describeTool, hookCommand, EVENTS };
+module.exports = { install, uninstall, repair, status, runHook, describeTool, hookCommand, EVENTS };

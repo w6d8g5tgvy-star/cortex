@@ -10,7 +10,7 @@ const DEFAULTS = () => ({
   remote: { enabled: false, token: '' },
   screen: { enabled: false },
   agents: { enabled: false, folders: [], permission: 'acceptEdits', maxMinutes: 120, saveGate: true, phoneApprovals: false, approvalWaitSeconds: 120, instructions: '' },
-  connector: { token: '', tunnel: false },
+  connector: { token: '', tunnel: false, provider: 'cloudflare', lastUrl: '' },
   search: { semantic: true, model: 'nomic-embed-text' },
   backups: { daily: true },
 });

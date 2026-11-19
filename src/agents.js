@@ -153,6 +153,16 @@ class AgentRunner {
     res.version = (v.out || v.err).trim().split(/\r?\n/)[0] || null;
     if (v.code !== 0 && !res.version) { res.detail = `Found, but it would not start: ${(v.err || 'unknown error').trim().slice(0, 300)}`; return res; }
     if (tool !== 'claude') { res.detail = 'Found. Sign-in is checked the first time it runs.'; return res; }
+    // `claude auth status` answers instantly with JSON and doesn't start a session (so no hooks run).
+    // The Claude desktop app signs in separately: the CLI needs its own sign-in.
+    const a = await this.runQuick(avail.path, ['auth', 'status'], this.vault, 20000);
+    let auth = null;
+    try { auth = JSON.parse(String(a.out).slice(String(a.out).indexOf('{'))); } catch { /* older CLI without auth status */ }
+    if (auth && auth.loggedIn === false && !process.env.ANTHROPIC_API_KEY) {
+      res.signedIn = false;
+      res.detail = 'Not signed in. The Claude desktop app signs in separately from the claude command. Open PowerShell, run:  claude auth login  (or run "claude" and type /login), finish in the browser, then press Test again.';
+      return res;
+    }
     const r = await this.runQuick(avail.path, ['-p', 'Reply with exactly: CORTEX-OK', '--output-format', 'json'], this.vault, 90000);
     let result = null;
     for (const line of String(r.out).split(/\r?\n/).reverse()) { try { const j = JSON.parse(line); if (j && (j.type === 'result' || j.result !== undefined)) { result = j; break; } } catch { /* not json */ } }

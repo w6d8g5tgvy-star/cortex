@@ -16,7 +16,7 @@ const claudeHooks = require('./claude-hooks');
 const agents = require('./agents');
 const { AgentRunner } = agents;
 const mind = require('./mind');
-const { Tunnel } = require('./tunnel');
+const { PublicLink } = require('./tunnel');
 const skills = require('./skills');
 const insights = require('./insights');
 const templates = require('./templates');
@@ -82,8 +82,24 @@ function startServer({ store, port, host, token: cliToken }) {
   setTimeout(semIndex, 5000).unref();
   store.on('change', () => { clearTimeout(semTimer); semTimer = setTimeout(semIndex, 15000); semTimer.unref(); });
   const runner = new AgentRunner(store);
-  const tunnel = new Tunnel(port);
-  if (conf().connector.tunnel) setTimeout(() => tunnel.start().then(() => broadcast({ type: 'tunnel' })), 1500).unref();
+  const tunnel = new PublicLink(port, () => conf().connector.provider);
+  // Remember the last public link so a change (quick tunnels get a new random address on every restart)
+  // is announced in the activity feed instead of silently breaking saved connectors.
+  const noteLink = () => {
+    const url = tunnel.url;
+    if (!url) return;
+    const s = conf();
+    if (s.connector.lastUrl === url) return;
+    const had = s.connector.lastUrl;
+    settingsMod.update(vault, { connector: { lastUrl: url } });
+    if (had) store.log({ agent: 'cortex', action: 'connector.link', summary: tunnel.status().permanent ? 'Connector link is now permanent (Tailscale). Paste it into Claude/ChatGPT once; it will not change again.' : 'Connector link CHANGED (quick tunnel restarted). Apps using the old link can no longer reach Cortex: copy the new one from Settings → Connect AI apps.' });
+  };
+  tunnel.refresh().catch(() => {});
+  // keep the Cortex block in ~/.claude/CLAUDE.md / ~/.codex/AGENTS.md on the latest prompt (only where the user added it)
+  try { const ins = require('./instructions'); for (const [k, v] of Object.entries(ins.status())) if (v === 'outdated') ins.install(k); } catch { /* optional */ }
+  // self-heal Claude Code hooks written by older versions (PowerShell couldn't run them on Windows)
+  try { if (claudeHooks.repair({ vault }).repaired) store.log({ agent: 'cortex', action: 'hooks.repair', summary: 'Repaired the Claude Code hooks so they run on this computer (old command line failed in PowerShell).' }); } catch { /* settings unreadable */ }
+  if (conf().connector.tunnel) setTimeout(() => tunnel.start().then(() => { noteLink(); broadcast({ type: 'tunnel' }); }), 1500).unref();
   // runs that were going when Cortex last stopped can't be tracked any more
   for (const s of sessions.list(vault)) if (s.launched && s.status === 'working') sessions.upsert(vault, s.id, { status: 'error', step: 'Cortex restarted while this run was going; it may still be running in the background' });
   const broadcast = (ev) => { const data = `data: ${JSON.stringify(ev)}\n\n`; for (const res of sse) res.write(data); };
@@ -477,9 +493,19 @@ function startServer({ store, port, host, token: cliToken }) {
     if (p === '/api/tunnel' && m === 'POST') {
       if (!localOnly()) return;
       const b = await json();
-      settingsMod.update(vault, { connector: { tunnel: b.action === 'start' } });
-      const st = b.action === 'start' ? await tunnel.start() : tunnel.stop();
+      if (b.provider === 'tailscale' || b.provider === 'cloudflare') {
+        if (b.provider !== tunnel.provider && b.action === 'start') await tunnel.stop();
+        settingsMod.update(vault, { connector: { provider: b.provider } });
+      }
+      let st;
+      if (b.action === 'check') st = await tunnel.refresh();
+      else {
+        settingsMod.update(vault, { connector: { tunnel: b.action === 'start' } });
+        st = b.action === 'start' ? await tunnel.start() : await tunnel.stop();
+      }
+      noteLink();
       broadcast({ type: 'tunnel' });
+      if (b.action === 'check') return send(res, 200, st);
       return send(res, st.error && b.action === 'start' ? 400 : 200, st);
     }
 
@@ -495,7 +521,7 @@ function startServer({ store, port, host, token: cliToken }) {
         claudeHooks: local ? claudeHooks.status() : undefined,
         instructions: local ? require('./instructions').status() : undefined,
         agents: { enabled: s.agents.enabled, folders: s.agents.folders, permission: s.agents.permission, maxMinutes: s.agents.maxMinutes, instructions: s.agents.instructions || '', saveGate: s.agents.saveGate !== false, phoneApprovals: !!s.agents.phoneApprovals },
-        connector: local ? { token: s.connector.token, tunnel: tunnel.status(), cloudflared: await tunnel.available(), localUrl: `http://127.0.0.1:${port}/mcp/${s.connector.token}` } : undefined,
+        connector: local ? { token: s.connector.token, tunnel: tunnel.status(), provider: tunnel.provider, ...(await tunnel.tools()), localUrl: `http://127.0.0.1:${port}/mcp/${s.connector.token}` } : undefined,
       });
     }
     if (p === '/api/settings' && m === 'POST') {

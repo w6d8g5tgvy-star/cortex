@@ -164,7 +164,9 @@ Paste a video link, an article link, or a topic you want written.
 
 ## Connect cloud apps (claude.ai, ChatGPT)
 
-- **Getting a public address.** Cloud apps need a public https address. In Settings → Connect AI apps, *Create public link* starts a free Cloudflare quick tunnel (needs [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)).
+- **Getting a public address.** Cloud apps need a public https address. In Settings → Connect AI apps choose:
+  - **Permanent link (recommended):** [Tailscale Funnel](https://tailscale.com/kb/1223/funnel) gives `https://<computer>.<tailnet>.ts.net`, which never changes, so you add the connector once. Needs Tailscale signed in and Funnel allowed on your tailnet (Cortex shows the link to turn it on).
+  - **Quick link:** a free Cloudflare quick tunnel (needs [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)). Its address changes every time Cortex restarts or updates, so saved connectors stop working until you paste the new link.
 - **claude.ai** (verified against Claude's help pages): Customize → Connectors → + Add → Add custom connector → paste the secret connector URL → *No sign in*.
 - **ChatGPT:** add the same URL as a developer-mode connector. Its exact menus weren't verifiable from here.
 - **Keep the link secret.** It gives full access to your vault. *New secret link* invalidates the old one.

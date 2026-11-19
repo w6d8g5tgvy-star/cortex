@@ -1,7 +1,7 @@
 {
-  "version": "1.2.3",
-  "branch": "main",
-  "url": "https://codeload.github.com/w6d8g5tgvy-star/cortex/tar.gz/refs/heads/main",
-  "notes": "Test button + agent_check tool: confirms Claude Code is found where Cortex can start it, shows its version, and checks it is signed in.",
-  "date": "2026-11-19T20:50:16.245Z"
+    "version":  "1.2.4",
+    "branch":  "main",
+    "url":  "https://codeload.github.com/w6d8g5tgvy-star/cortex/tar.gz/refs/heads/main",
+    "notes":  "Permanent connector link via Tailscale Funnel (no more dead connectors after restarts), Claude Code hooks fixed for Windows PowerShell and self-repaired, instant Claude Code sign-in check, rewritten agent prompt.",
+    "date":  "2026-11-19T21:01:38.579Z"
 }
