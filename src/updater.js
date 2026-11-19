@@ -57,7 +57,7 @@ async function check(source) {
   try { manifest = await getJson(`https://raw.githubusercontent.com/${repo}/HEAD/release.json`); } catch { /* no manifest */ }
   if (manifest && manifest.version) {
     const v = String(manifest.version).replace(/^v/, '');
-    const url = manifest.url || `https://codeload.github.com/${repo}/tar.gz/refs/tags/v${v}`;
+    const url = manifest.url || `https://codeload.github.com/${repo}/tar.gz/refs/heads/${manifest.branch || 'main'}`;
     return { mode: 'github', repo, current, latest: v, available: cmpVer(v, current) > 0, url, sha256: manifest.sha256, notes: manifest.notes || '' };
   }
   const rel = await getJson(`https://api.github.com/repos/${repo}/releases/latest`);

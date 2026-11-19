@@ -213,19 +213,14 @@ New agent tools: `live_update`, `live_screenshot` (computer screen, an image fil
 
 ## 4. Automatic updates
 
-Cortex updates itself from a GitHub repository where you publish releases:
+Cortex updates itself from **https://github.com/w6d8g5tgvy-star/cortex** (already set as the update source).
 
-1. Put this folder in a GitHub repository.
-2. In **Settings → Updates**, set the update source to `your-name/your-repo`.
-3. To publish a new version, run `scripts/release.sh 1.2.0 "What changed"` (needs the GitHub CLI). It bumps the version, runs the tests, pushes, and creates a release with a checksum.
-
-How running copies handle a new release:
-- Every running copy checks every 6 hours (and about 20 seconds after starting).
-- It downloads the new version, verifies the checksum, backs up the current version, installs, and restarts.
-- If the new version crashes on startup, Cortex restores the backup automatically.
-- You can turn off auto-install and update manually with **Check now / Install** or with `cortex update`.
-- If you installed with `git clone`, updates use `git pull` instead.
-- MCP processes started by AI apps (stdio mode) pick up the new version the next time the AI app restarts them.
+- **Checks:** every running copy checks `release.json` on the `main` branch about 20 seconds after starting and then every 6 hours.
+- **Installing:** when the version is newer, it downloads that code, backs up the current version, installs, and restarts.
+- **Safety net:** if the new version crashes on startup, Cortex restores the backup automatically.
+- **Manual control:** turn off auto-install in Settings → Updates and use **Check now / Install**, or `cortex update`.
+- **To publish a new version:** run `scripts/release.sh 1.3.0 "What changed"`. It bumps the version, runs the tests, writes `release.json` and pushes. No GitHub Release is needed. A published GitHub Release works too, as a fallback.
+- **Git installs:** a copy installed with `git clone` updates with `git pull` instead.
 
 ## 5. The vault
 
