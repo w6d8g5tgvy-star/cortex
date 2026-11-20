@@ -426,10 +426,10 @@ class Store extends EventEmitter {
     const body = String(rec.body || '').replace(/^---[\s\S]*?---\s*/, '');
     const lines = body.split(/\r?\n/);
     const blocks = []; // paragraphs and list items, with their nearest heading
-    let heading = ''; let cur = [];
-    const flush = () => { if (cur.length) blocks.push({ heading, text: cur.join('\n') }); cur = []; };
+    let heading = ''; let headLine = ''; let cur = [];
+    const flush = () => { if (cur.length) blocks.push({ heading, headLine, text: cur.join('\n') }); cur = []; };
     for (const ln of lines) {
-      if (/^#{1,6}\s/.test(ln)) { flush(); heading = ln.replace(/^#+\s*/, '').trim(); continue; }
+      if (/^#{1,6}\s/.test(ln)) { flush(); heading = ln.replace(/^#+\s*/, '').trim(); headLine = ln.trim(); continue; }
       if (!ln.trim()) { flush(); continue; }
       if (/^\s*([-*+]|\d+\.)\s/.test(ln) && cur.length && !/^\s/.test(ln)) flush();
       cur.push(ln);
@@ -450,7 +450,9 @@ class Store extends EventEmitter {
       if (down >= up && canDown) { if ((text + '\n' + blocks[hi + 1].text).length > max) break; text += '\n' + blocks[++hi].text; }
       else { if ((blocks[lo - 1].text + '\n' + text).length > max) break; text = blocks[--lo].text + '\n' + text; }
     }
-    const head = blocks[best].heading ? `[${blocks[best].heading}] ` : '';
+    // The heading is shown as the note wrote it (e.g. "### 14:05 · codex · ✓ finished"): headings are often the
+    // very format an agent must copy, so rewriting them (Train AI round 3 found "[…]" being copied) teaches it wrong.
+    const head = blocks[best].headLine ? blocks[best].headLine + '\n' : '';
     return (head + text).slice(0, max + 80);
   }
 

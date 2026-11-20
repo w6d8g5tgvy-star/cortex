@@ -134,7 +134,7 @@ const tool = async (c, name, args) => {
     const st2 = new Store(fs.mkdtempSync(path.join(os.tmpdir(), 'cortex-passage-')));
     const rec = st2.create('note', { title: 'Decisions', body: '# Decisions\n\n## Product\n- Vault is Markdown.\n- **Skills are add-only.** Cortex marks the skills it installs with `.cortex-managed`.\n\n## Updates\nThe new version confirms itself after 8 seconds of uptime; otherwise it is rolled back.\n' });
     const p = st2.passage(rec, 'update confirm rolled back uptime', 300);
-    assert.ok(p.startsWith('[Updates]') && p.includes('8 seconds'), p);
+    assert.ok(p.startsWith('## Updates\n') && p.includes('8 seconds'), p); // heading kept exactly as written
     assert.ok(st2.passage(rec, 'skills cortex-managed marker', 300).includes('.cortex-managed'));
     assert.strictEqual(st2.passage(rec, 'zebra giraffe', 300), '');
     fs.rmSync(st2.vault, { recursive: true, force: true });
