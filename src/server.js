@@ -136,6 +136,13 @@ function startServer({ store, port, host, token: cliToken }) {
     return entry.pending;
   };
   const tunnel = new PublicLink(port, () => conf().connector.provider);
+  require('./mcp').setPhoneLinkProvider(async () => {
+    const t = encodeURIComponent(tokenNow());
+    const links = [];
+    if (tunnel.url) links.push({ kind: 'public', label: 'Public link (works anywhere, also on mobile data)', url: `${tunnel.url.replace(/\/$/, '')}/?token=${t}#/live` });
+    if (conf().remote.enabled) for (const a of lanAddresses(port).sort((a, b) => (b.kind === 'tailscale') - (a.kind === 'tailscale'))) links.push({ kind: a.kind, label: a.kind === 'tailscale' ? 'Tailscale (works anywhere with the Tailscale app)' : `Wi-Fi / home network (${a.iface})`, url: `${a.url}/?token=${t}#/live` });
+    return { links, remoteEnabled: !!conf().remote.enabled };
+  });
   // Remember the last public link so a change (quick tunnels get a new random address on every restart)
   // is announced in the activity feed instead of silently breaking saved connectors.
   const noteLink = () => {

@@ -443,6 +443,21 @@ function buildTools(store) {
       },
     },
     {
+      name: 'phone_link',
+      description: 'Get the link that opens the Cortex dashboard on the user\'s phone (already paired: opening it pairs the phone). Use it when the user asks how to open Cortex on their phone. Give the link only to the user; never save it in memory, tasks or files, because it contains their pairing key.',
+      inputSchema: { type: 'object', properties: {} },
+      run: async () => {
+        if (!phoneLinkProvider) return 'Phone links are only available from the running Cortex app.';
+        const r = await phoneLinkProvider();
+        if (!r.links.length) return 'No phone link is available right now: this computer has no network address and no public link is running. Turn on the public link in Cortex → Settings → Connect AI apps, or connect the computer to Wi-Fi or Tailscale.';
+        const lines = r.links.map((l) => `- ${l.label}: ${l.url}`);
+        return ['Open one of these on the phone (the first works anywhere):', ...lines, '',
+          r.remoteEnabled ? '' : 'Note: phone access over Wi-Fi/Tailscale is turned off in Settings → Phone access, so only the public link works until it is turned on.',
+          r.links[0].kind === 'public' ? 'The public link changes when Cortex restarts; Tailscale gives a permanent one.' : '',
+          'Do not save these links in Cortex memory: they contain the pairing key.'].filter(Boolean).join('\n');
+      },
+    },
+    {
       name: 'experience_digest',
       description: 'What earlier agent sessions on a project learned the hard way, worked out from its agent journal for free: files changed most, fail → fix pairs, recurring trouble, and who saves what they learn. Read it before starting work; turn real patterns into memory_write rules.',
       inputSchema: { type: 'object', required: ['project'], properties: { project: str('Project slug or title') } },
@@ -548,6 +563,10 @@ function buildTools(store) {
   ];
 }
 
+// The server registers how to build phone links (it knows the port, tunnel and pairing key).
+let phoneLinkProvider = null;
+function setPhoneLinkProvider(fn) { phoneLinkProvider = fn; }
+
 function createMcp(store) {
   const tools = buildTools(store);
   const byName = new Map(tools.map((t) => [t.name, t]));
@@ -633,4 +652,4 @@ function runStdio(store) {
   process.stderr.write(`[cortex] MCP stdio server ready (vault: ${store.vault})\n`);
 }
 
-module.exports = { createMcp, runStdio, INSTRUCTIONS, VERSION };
+module.exports = { createMcp, runStdio, INSTRUCTIONS, VERSION, setPhoneLinkProvider };

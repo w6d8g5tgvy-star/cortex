@@ -70,6 +70,20 @@ function mcpStdio() {
     assert.ok(man.start_url.includes('token=test-token-123'));
     const deny = await fetch(remote + '/api/settings', { method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json' }, body: '{"updates":{"source":"evil/repo"}}' });
     assert.equal(deny.status, 403);
+    // phone_link MCP tool: an agent can hand the user a working phone link (e.g. when they are away from the computer)
+    const mpost = (body, sid) => fetch(base + '/mcp', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', ...(sid ? { 'Mcp-Session-Id': sid } : {}) }, body: JSON.stringify(body) });
+    const mi = await mpost({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'phone-test' } } });
+    const msid = mi.headers.get('mcp-session-id');
+    await mpost({ jsonrpc: '2.0', method: 'notifications/initialized' }, msid);
+    const pl = await (await mpost({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'phone_link', arguments: {} } }, msid)).json();
+    const plText = pl.result.content[0].text;
+    const link = (plText.match(new RegExp('http://' + lanIp.replace(/\./g, '\\.') + ':\\d+/\\?token=[^\\s#]+#/live')) || [])[0];
+    assert.ok(link, plText);
+    const viaLink = await fetch(link);
+    assert.equal(viaLink.status, 200);
+    assert.ok(/cortex_token=/.test(viaLink.headers.get('set-cookie') || ''));
+    assert.ok(/never save|Do not save/i.test(plText));
+    ok('phone_link MCP tool returns a link that really pairs a phone');
     const tunneled = await fetch(base + '/api/state', { headers: { 'X-Forwarded-For': '8.8.8.8' } });
     assert.equal(tunneled.status, 401);
     ok('other devices need the pairing token; cookie pairing works; settings are computer-only; tunnels are not trusted');
