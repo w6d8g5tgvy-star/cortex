@@ -1,0 +1,168 @@
+{
+  "model": "claude-haiku-5-5",
+  "trials": 2,
+  "date": "2026-11-20T22:13:20.305Z",
+  "decisions": [
+    {
+      "task": "Find a faster, more reliable way to run our 40-minute flaky Playwright test suite",
+      "worth": true,
+      "requested": true,
+      "said_requested": true,
+      "correct": true,
+      "landed_on_task": true,
+      "used_advice": true,
+      "ms": 9851,
+      "cost": 0.00376509,
+      "turns": 4
+    },
+    {
+      "task": "Find a faster, more reliable way to run our 40-minute flaky Playwright test suite",
+      "worth": true,
+      "requested": true,
+      "said_requested": true,
+      "correct": true,
+      "landed_on_task": true,
+      "used_advice": false,
+      "ms": 9154,
+      "cost": 0.0015787600000000002,
+      "turns": 4
+    },
+    {
+      "task": "Improve player retention in our Roblox tycoon: research what top tycoons do in the first 10 minutes",
+      "worth": true,
+      "requested": true,
+      "said_requested": true,
+      "correct": true,
+      "landed_on_task": true,
+      "used_advice": false,
+      "ms": 9535,
+      "cost": 0.0017425700000000001,
+      "turns": 4
+    },
+    {
+      "task": "Improve player retention in our Roblox tycoon: research what top tycoons do in the first 10 minutes",
+      "worth": true,
+      "requested": true,
+      "said_requested": true,
+      "correct": true,
+      "landed_on_task": true,
+      "used_advice": false,
+      "ms": 11111,
+      "cost": 0.00162385,
+      "turns": 4
+    },
+    {
+      "task": "Fix typo in README",
+      "worth": false,
+      "requested": false,
+      "said_requested": false,
+      "correct": true,
+      "landed_on_task": null,
+      "used_advice": false,
+      "ms": 8679,
+      "cost": 0.00130327,
+      "turns": 3
+    },
+    {
+      "task": "Fix typo in README",
+      "worth": false,
+      "requested": false,
+      "said_requested": false,
+      "correct": true,
+      "landed_on_task": null,
+      "used_advice": false,
+      "ms": 7684,
+      "cost": 0.0011413900000000002,
+      "turns": 3
+    },
+    {
+      "task": "Rename the variable usr to user in login.js",
+      "worth": false,
+      "requested": false,
+      "said_requested": false,
+      "correct": true,
+      "landed_on_task": null,
+      "used_advice": true,
+      "ms": 7889,
+      "cost": 0.00129917,
+      "turns": 3
+    },
+    {
+      "task": "Rename the variable usr to user in login.js",
+      "worth": false,
+      "requested": false,
+      "said_requested": false,
+      "correct": true,
+      "landed_on_task": null,
+      "used_advice": false,
+      "ms": 7971,
+      "cost": 0.00111962,
+      "turns": 3
+    }
+  ],
+  "recall": [
+    {
+      "lesson_in_memory": false,
+      "passed": 0,
+      "total": 6,
+      "ms": 13815,
+      "cost": 0.0027347800000000005,
+      "turns": 9,
+      "out_tokens": 1597
+    },
+    {
+      "lesson_in_memory": false,
+      "passed": 0,
+      "total": 6,
+      "ms": 15708,
+      "cost": 0.0033264500000000003,
+      "turns": 12,
+      "out_tokens": 2094
+    },
+    {
+      "lesson_in_memory": false,
+      "passed": 0,
+      "total": 6,
+      "ms": 20153,
+      "cost": 0.00506841,
+      "turns": 21,
+      "out_tokens": 2709
+    },
+    {
+      "lesson_in_memory": true,
+      "passed": 6,
+      "total": 6,
+      "ms": 11936,
+      "cost": 0.0019342299999999999,
+      "turns": 4,
+      "out_tokens": 1114
+    },
+    {
+      "lesson_in_memory": true,
+      "passed": 6,
+      "total": 6,
+      "ms": 14358,
+      "cost": 0.0025599900000000003,
+      "turns": 6,
+      "out_tokens": 1762
+    },
+    {
+      "lesson_in_memory": true,
+      "passed": 6,
+      "total": 6,
+      "ms": 11536,
+      "cost": 0.0022373000000000002,
+      "turns": 5,
+      "out_tokens": 1245
+    }
+  ],
+  "summary": {
+    "decision_accuracy": "8/8",
+    "worth_requested": "4/4",
+    "trivial_skipped": "4/4",
+    "requests_landed_on_task": "4/4",
+    "recall_empty_memory": "0/3 perfect",
+    "recall_lesson_in_memory": "3/3 perfect",
+    "total_cost": 0.0314
+  }
+}
