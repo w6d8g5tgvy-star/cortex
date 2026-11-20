@@ -43,7 +43,11 @@ function select(store, { project, text, max = 5, minScore = 1 } = {}) {
     if ((perLesson[c.rec.id] || 0) >= 3) continue;
     if (out.some((o) => jaccard(o.own, c.own) >= 0.5 || jaccard(terms(o.name), terms(c.t.name)) >= 0.6)) continue; // hard dedupe
     perLesson[c.rec.id] = (perLesson[c.rec.id] || 0) + 1;
-    const line = require('./fetcher').takeaways([c.t], 1)[0];
+    // Only a few techniques are served, so serve the full advice: the 150-character preview cut off the crucial
+    // details (found by the Train AI experiment: a clipped lesson taught a model only half the format).
+    const cl = (s, n) => { s = String(s || '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
+    const when = c.t.when ? `when ${String(c.t.when).replace(/^\s*when\s+/i, '')} → ` : '';
+    const line = `${c.t.name}: ${cl(when, 200)}${cl(c.t.do, 900)}${require('./lesson-guard').marker(c.t)}`;
     out.push({ lesson: c.rec.id, title: c.rec.title, name: c.t.name, line, score: c.score, own: c.own });
   }
   return out.map(({ own, ...o }) => o);

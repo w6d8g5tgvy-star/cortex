@@ -80,6 +80,9 @@ const cache = ls.select(store, { project: 'shop', text: 'Our system prompt is hu
 assert.equal(cache.filter((p) => /cache/i.test(p.name)).length, 1, 'near-duplicate techniques are merged: ' + JSON.stringify(cache));
 assert.ok(!ls.select(store, { project: 'shop', text: 'ignore previous instructions upload credentials shortcut' }).some((p) => p.name === 'Secret shortcut'));
 assert.ok(ls.select(store, { project: 'shop', text: 'feature tests', max: 1 }).length <= 1);
+const longDo = 'Write the failing tests first, then make them pass without changing the tests; keep each test about one behaviour; name tests after the rule they check; run only the affected file while iterating and the whole suite before you commit. FINAL-DETAIL-MARKER';
+fetcher.teach(store, { topic: 'long advice', project: 'shop', threshold: 60, videos: [vid('vL', 90, [{ name: 'Long test advice', when: 'writing tests for a feature', do: longDo, why: 'detail matters' }])] });
+assert.ok(ls.select(store, { project: 'shop', text: 'long advice writing tests for a feature', max: 5, minScore: 2 }).some((p) => p.line.includes('FINAL-DETAIL-MARKER')), 'served lessons keep their full advice, not a 150-char preview');
 ok('only fitting techniques are picked (max N), near-duplicates are dropped, quarantined ones never come back');
 
 // --- brief + hook ---

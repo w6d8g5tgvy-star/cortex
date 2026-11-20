@@ -1,0 +1,89 @@
+{
+  "model": "claude-haiku-5-5",
+  "trials": 3,
+  "date": "2026-11-20T22:09:48.941Z",
+  "tasks": {
+    "isoweek": {
+      "served_lessons": [
+        "Thursday rule for ISO weeks"
+      ],
+      "baseline": [
+        {
+          "passed": 20,
+          "total": 20,
+          "failures": [],
+          "ms": 11416,
+          "cost": 0.00165592,
+          "out_tokens": 1032,
+          "in_tokens": 29994
+        },
+        {
+          "passed": 20,
+          "total": 20,
+          "failures": [],
+          "ms": 12467,
+          "cost": 0.00170559,
+          "out_tokens": 1379,
+          "in_tokens": 29999
+        },
+        {
+          "passed": 20,
+          "total": 20,
+          "failures": [],
+          "ms": 9148,
+          "cost": 0.0012686899999999998,
+          "out_tokens": 506,
+          "in_tokens": 29997
+        }
+      ],
+      "taught": [
+        {
+          "passed": 20,
+          "total": 20,
+          "failures": [],
+          "ms": 11424,
+          "cost": 0.00177962,
+          "out_tokens": 1163,
+          "in_tokens": 30285,
+          "used_technique": false
+        },
+        {
+          "passed": 20,
+          "total": 20,
+          "failures": [],
+          "ms": 12444,
+          "cost": 0.00180584,
+          "out_tokens": 1575,
+          "in_tokens": 30281,
+          "used_technique": false
+        },
+        {
+          "passed": 20,
+          "total": 20,
+          "failures": [],
+          "ms": 11071,
+          "cost": 0.0015590399999999998,
+          "out_tokens": 1081,
+          "in_tokens": 30282,
+          "used_technique": false
+        }
+      ],
+      "summary": {
+        "baseline": {
+          "pass_rate": 1,
+          "perfect_runs": 3,
+          "avg_seconds": 11,
+          "avg_cost": 0.0015,
+          "avg_out_tokens": 972
+        },
+        "taught": {
+          "pass_rate": 1,
+          "perfect_runs": 3,
+          "avg_seconds": 11.6,
+          "avg_cost": 0.0017,
+          "avg_out_tokens": 1273
+        }
+      }
+    }
+  }
+}

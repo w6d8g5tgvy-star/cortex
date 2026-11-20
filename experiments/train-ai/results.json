@@ -1,0 +1,214 @@
+{
+  "model": "claude-haiku-5-5",
+  "trials": 3,
+  "date": "2026-11-20T22:05:08.961Z",
+  "tasks": {
+    "semver": {
+      "served_lessons": [
+        "Spec-rule checklist before coding",
+        "Test the spec example chain"
+      ],
+      "baseline": [
+        {
+          "passed": 26,
+          "total": 26,
+          "failures": [],
+          "ms": 14999,
+          "cost": 0.007132599999999999,
+          "out_tokens": 2270,
+          "in_tokens": 29989
+        },
+        {
+          "passed": 26,
+          "total": 26,
+          "failures": [],
+          "ms": 13554,
+          "cost": 0.00203673,
+          "out_tokens": 2041,
+          "in_tokens": 29994
+        },
+        {
+          "passed": 26,
+          "total": 26,
+          "failures": [],
+          "ms": 13827,
+          "cost": 0.0020027300000000003,
+          "out_tokens": 1975,
+          "in_tokens": 29989
+        }
+      ],
+      "taught": [
+        {
+          "passed": 26,
+          "total": 26,
+          "failures": [],
+          "ms": 14725,
+          "cost": 0.00214652,
+          "out_tokens": 1918,
+          "in_tokens": 30232,
+          "used_technique": true
+        },
+        {
+          "passed": 26,
+          "total": 26,
+          "failures": [],
+          "ms": 16100,
+          "cost": 0.0023257399999999998,
+          "out_tokens": 2615,
+          "in_tokens": 30233,
+          "used_technique": false
+        },
+        {
+          "passed": 26,
+          "total": 26,
+          "failures": [],
+          "ms": 16012,
+          "cost": 0.0022362399999999996,
+          "out_tokens": 2436,
+          "in_tokens": 30233,
+          "used_technique": true
+        }
+      ],
+      "summary": {
+        "baseline": {
+          "pass_rate": 1,
+          "perfect_runs": 3,
+          "avg_seconds": 14.1,
+          "avg_cost": 0.0037,
+          "avg_out_tokens": 2095
+        },
+        "taught": {
+          "pass_rate": 1,
+          "perfect_runs": 3,
+          "avg_seconds": 15.6,
+          "avg_cost": 0.0022,
+          "avg_out_tokens": 2323
+        }
+      }
+    },
+    "journal": {
+      "served_lessons": [
+        "Cortex journal header format"
+      ],
+      "baseline": [
+        {
+          "passed": 0,
+          "total": 6,
+          "failures": [
+            "[{\"time\":\"2026-11-20T14:05:00\",\"agent\":\"claude-code\",\"status\":\"done\",\"source\":\"started from Cortex\"}] → \"### 14:05 — claude-code — done (started from Cortex)\" (want \"### 14:05 · claude-code · ✓ finished (started from Cortex)\")",
+            "[{\"time\":\"2026-11-20T09:30:00\",\"agent\":\"codex\",\"status\":\"error\"}] → \"### 09:30 — codex — error\" (want \"### 09:30 · codex · ✗ failed\")",
+            "[{\"time\":\"2026-11-20T23:59:00\",\"agent\":\"claude-haiku\",\"status\":\"stopped\",\"source\":\"phone\"}] → \"### 23:59 — claude-haiku — stopped (phone)\" (want \"### 23:59 · claude-haiku · ■ stopped (phone)\")",
+            "[{\"time\":\"2026-01-02T00:00:00\",\"agent\":\"gpt\",\"status\":\"done\"}] → \"### 00:00 — gpt — done\" (want \"### 00:00 · gpt · ✓ finished\")",
+            "[{\"time\":\"2026-11-20T07:08:00\",\"agent\":\"\",\"status\":\"done\"}] → \"### 07:08 —  — done\" (want \"### 07:08 · agent · ✓ finished\")",
+            "[{\"time\":\"2026-11-20T12:00:00\",\"agent\":\"codex\",\"status\":\"cancelled\",\"source\":\"\"}] → \"### 12:00 — codex — cancelled\" (want \"### 12:00 · codex · ■ stopped\")"
+          ],
+          "ms": 14459,
+          "cost": 0.00265092,
+          "out_tokens": 1436,
+          "in_tokens": 91626
+        },
+        {
+          "passed": 0,
+          "total": 6,
+          "failures": [
+            "[{\"time\":\"2026-11-20T14:05:00\",\"agent\":\"claude-code\",\"status\":\"done\",\"source\":\"started from Cortex\"}] → \"## 2026-11-20 14:05 — claude-code — done (started from Cortex)\" (want \"### 14:05 · claude-code · ✓ finished (started from Cortex)\")",
+            "[{\"time\":\"2026-11-20T09:30:00\",\"agent\":\"codex\",\"status\":\"error\"}] → \"## 2026-11-20 09:30 — codex — error\" (want \"### 09:30 · codex · ✗ failed\")",
+            "[{\"time\":\"2026-11-20T23:59:00\",\"agent\":\"claude-haiku\",\"status\":\"stopped\",\"source\":\"phone\"}] → \"## 2026-11-20 23:59 — claude-haiku — stopped (phone)\" (want \"### 23:59 · claude-haiku · ■ stopped (phone)\")",
+            "[{\"time\":\"2026-01-02T00:00:00\",\"agent\":\"gpt\",\"status\":\"done\"}] → \"## 2026-01-02 00:00 — gpt — done\" (want \"### 00:00 · gpt · ✓ finished\")",
+            "[{\"time\":\"2026-11-20T07:08:00\",\"agent\":\"\",\"status\":\"done\"}] → \"## 2026-11-20 07:08 —  — done\" (want \"### 07:08 · agent · ✓ finished\")",
+            "[{\"time\":\"2026-11-20T12:00:00\",\"agent\":\"codex\",\"status\":\"cancelled\",\"source\":\"\"}] → \"## 2026-11-20 12:00 — codex — cancelled\" (want \"### 12:00 · codex · ■ stopped\")"
+          ],
+          "ms": 13205,
+          "cost": 0.00218996,
+          "out_tokens": 1441,
+          "in_tokens": 60821
+        },
+        {
+          "passed": 0,
+          "total": 6,
+          "failures": [
+            "[{\"time\":\"2026-11-20T14:05:00\",\"agent\":\"claude-code\",\"status\":\"done\",\"source\":\"started from Cortex\"}] → \"## 2026-11-20T14:05:00 — claude-code — done (started from Cortex)\" (want \"### 14:05 · claude-code · ✓ finished (started from Cortex)\")",
+            "[{\"time\":\"2026-11-20T09:30:00\",\"agent\":\"codex\",\"status\":\"error\"}] → \"## 2026-11-20T09:30:00 — codex — error\" (want \"### 09:30 · codex · ✗ failed\")",
+            "[{\"time\":\"2026-11-20T23:59:00\",\"agent\":\"claude-haiku\",\"status\":\"stopped\",\"source\":\"phone\"}] → \"## 2026-11-20T23:59:00 — claude-haiku — stopped (phone)\" (want \"### 23:59 · claude-haiku · ■ stopped (phone)\")",
+            "[{\"time\":\"2026-01-02T00:00:00\",\"agent\":\"gpt\",\"status\":\"done\"}] → \"## 2026-01-02T00:00:00 — gpt — done\" (want \"### 00:00 · gpt · ✓ finished\")",
+            "[{\"time\":\"2026-11-20T07:08:00\",\"agent\":\"\",\"status\":\"done\"}] → \"## 2026-11-20T07:08:00 —  — done\" (want \"### 07:08 · agent · ✓ finished\")",
+            "[{\"time\":\"2026-11-20T12:00:00\",\"agent\":\"codex\",\"status\":\"cancelled\",\"source\":\"\"}] → \"## 2026-11-20T12:00:00 — codex — cancelled\" (want \"### 12:00 · codex · ■ stopped\")"
+          ],
+          "ms": 12052,
+          "cost": 0.0020049900000000003,
+          "out_tokens": 1109,
+          "in_tokens": 60729
+        }
+      ],
+      "taught": [
+        {
+          "passed": 0,
+          "total": 6,
+          "failures": [
+            "[{\"time\":\"2026-11-20T14:05:00\",\"agent\":\"claude-code\",\"status\":\"done\",\"source\":\"started from Cortex\"}] → \"### 14:05 · claude-code · ✓ (started from Cortex)\" (want \"### 14:05 · claude-code · ✓ finished (started from Cortex)\")",
+            "[{\"time\":\"2026-11-20T09:30:00\",\"agent\":\"codex\",\"status\":\"error\"}] → \"### 09:30 · codex · ✗\" (want \"### 09:30 · codex · ✗ failed\")",
+            "[{\"time\":\"2026-11-20T23:59:00\",\"agent\":\"claude-haiku\",\"status\":\"stopped\",\"source\":\"phone\"}] → \"### 23:59 · claude-haiku · ■ (phone)\" (want \"### 23:59 · claude-haiku · ■ stopped (phone)\")",
+            "[{\"time\":\"2026-01-02T00:00:00\",\"agent\":\"gpt\",\"status\":\"done\"}] → \"### 00:00 · gpt · ✓\" (want \"### 00:00 · gpt · ✓ finished\")",
+            "[{\"time\":\"2026-11-20T07:08:00\",\"agent\":\"\",\"status\":\"done\"}] → \"### 07:08 ·  · ✓\" (want \"### 07:08 · agent · ✓ finished\")",
+            "[{\"time\":\"2026-11-20T12:00:00\",\"agent\":\"codex\",\"status\":\"cancelled\",\"source\":\"\"}] → \"### 12:00 · codex · ○\" (want \"### 12:00 · codex · ■ stopped\")"
+          ],
+          "ms": 13475,
+          "cost": 0.00227877,
+          "out_tokens": 1379,
+          "in_tokens": 60889,
+          "used_technique": true
+        },
+        {
+          "passed": 0,
+          "total": 6,
+          "failures": [
+            "[{\"time\":\"2026-11-20T14:05:00\",\"agent\":\"claude-code\",\"status\":\"done\",\"source\":\"started from Cortex\"}] → \"### 14:05 · claude-code · ✓ (started from Cortex)\" (want \"### 14:05 · claude-code · ✓ finished (started from Cortex)\")",
+            "[{\"time\":\"2026-11-20T09:30:00\",\"agent\":\"codex\",\"status\":\"error\"}] → \"### 09:30 · codex · ✗\" (want \"### 09:30 · codex · ✗ failed\")",
+            "[{\"time\":\"2026-11-20T23:59:00\",\"agent\":\"claude-haiku\",\"status\":\"stopped\",\"source\":\"phone\"}] → \"### 23:59 · claude-haiku · ■ (phone)\" (want \"### 23:59 · claude-haiku · ■ stopped (phone)\")",
+            "[{\"time\":\"2026-01-02T00:00:00\",\"agent\":\"gpt\",\"status\":\"done\"}] → \"### 00:00 · gpt · ✓\" (want \"### 00:00 · gpt · ✓ finished\")",
+            "[{\"time\":\"2026-11-20T07:08:00\",\"agent\":\"\",\"status\":\"done\"}] → \"### 07:08 ·  · ✓\" (want \"### 07:08 · agent · ✓ finished\")",
+            "[{\"time\":\"2026-11-20T12:00:00\",\"agent\":\"codex\",\"status\":\"cancelled\",\"source\":\"\"}] → \"### 12:00 · codex · □\" (want \"### 12:00 · codex · ■ stopped\")"
+          ],
+          "ms": 14630,
+          "cost": 0.0018675700000000003,
+          "out_tokens": 1701,
+          "in_tokens": 30154,
+          "used_technique": true
+        },
+        {
+          "passed": 0,
+          "total": 6,
+          "failures": [
+            "[{\"time\":\"2026-11-20T14:05:00\",\"agent\":\"claude-code\",\"status\":\"done\",\"source\":\"started from Cortex\"}] → \"### 14:05 · claude-code · ✓ (started from Cortex)\" (want \"### 14:05 · claude-code · ✓ finished (started from Cortex)\")",
+            "[{\"time\":\"2026-11-20T09:30:00\",\"agent\":\"codex\",\"status\":\"error\"}] → \"### 09:30 · codex · ✗\" (want \"### 09:30 · codex · ✗ failed\")",
+            "[{\"time\":\"2026-11-20T23:59:00\",\"agent\":\"claude-haiku\",\"status\":\"stopped\",\"source\":\"phone\"}] → \"### 23:59 · claude-haiku · ■ (phone)\" (want \"### 23:59 · claude-haiku · ■ stopped (phone)\")",
+            "[{\"time\":\"2026-01-02T00:00:00\",\"agent\":\"gpt\",\"status\":\"done\"}] → \"### 00:00 · gpt · ✓\" (want \"### 00:00 · gpt · ✓ finished\")",
+            "[{\"time\":\"2026-11-20T07:08:00\",\"agent\":\"\",\"status\":\"done\"}] → \"### 07:08 ·  · ✓\" (want \"### 07:08 · agent · ✓ finished\")",
+            "[{\"time\":\"2026-11-20T12:00:00\",\"agent\":\"codex\",\"status\":\"cancelled\",\"source\":\"\"}] → \"### 12:00 · codex · ⊘\" (want \"### 12:00 · codex · ■ stopped\")"
+          ],
+          "ms": 15316,
+          "cost": 0.00225182,
+          "out_tokens": 1590,
+          "in_tokens": 61001,
+          "used_technique": true
+        }
+      ],
+      "summary": {
+        "baseline": {
+          "pass_rate": 0,
+          "perfect_runs": 0,
+          "avg_seconds": 13.2,
+          "avg_cost": 0.0023,
+          "avg_out_tokens": 1329
+        },
+        "taught": {
+          "pass_rate": 0,
+          "perfect_runs": 0,
+          "avg_seconds": 14.5,
+          "avg_cost": 0.0021,
+          "avg_out_tokens": 1557
+        }
+      }
+    }
+  }
+}
