@@ -98,7 +98,10 @@ function startServer({ store, port, host, token: cliToken }) {
   const tokenNow = () => cliToken || conf().remote.token;
   skills.seed(store);
   // daily backup + keep the meaning-search index fresh (both optional and best effort)
-  const doBackup = () => { if (conf().backups.daily) { try { backup.daily(vault); } catch { /* disk full etc. */ } } };
+  const doBackup = () => {
+    if (conf().backups.daily) { try { backup.daily(vault); } catch { /* disk full etc. */ } }
+    try { require('./experience').refreshAll(store); } catch { /* digests are best effort */ }
+  };
   setTimeout(doBackup, 15000).unref();
   setInterval(doBackup, 3600e3).unref();
   let semState = { available: false, reason: 'checking…', indexed: 0 };
@@ -333,6 +336,12 @@ function startServer({ store, port, host, token: cliToken }) {
     }
     // ---- insights, templates, history, backups ----
     if (p === '/api/health' && m === 'GET') return send(res, 200, insights.health(store));
+    if (p === '/api/experience' && m === 'GET') {
+      const exp = require('./experience');
+      const slug = store.resolveProject(u.searchParams.get('project') || '');
+      const r = exp.writeDigest(store, slug);
+      return send(res, 200, { id: r.id, digest: r.digest, markdown: exp.markdown(r.digest, store.get('projects/' + slug).title) });
+    }
     if (p === '/api/garden' && m === 'GET') return send(res, 200, insights.garden(store));
     if (p === '/api/garden/run' && m === 'POST') {
       const b = await json();

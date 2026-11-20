@@ -443,6 +443,17 @@ function buildTools(store) {
       },
     },
     {
+      name: 'experience_digest',
+      description: 'What earlier agent sessions on a project learned the hard way, worked out from its agent journal for free: files changed most, fail → fix pairs, recurring trouble, and who saves what they learn. Read it before starting work; turn real patterns into memory_write rules.',
+      inputSchema: { type: 'object', required: ['project'], properties: { project: str('Project slug or title') } },
+      run: (a) => {
+        const exp = require('./experience');
+        const slug = store.resolveProject(a.project);
+        const r = exp.writeDigest(store, slug);
+        return exp.markdown(r.digest, store.get('projects/' + slug).title) + `\n\n(Saved as ${r.id}.)`;
+      },
+    },
+    {
       name: 'daily_briefing',
       description: 'Summary of what happened recently (agent work, completed tasks, new memories) and what needs the user (approvals, overdue and blocked tasks).',
       inputSchema: { type: 'object', properties: { hours: { type: 'number', description: 'Look back this many hours (default 24)' } } },

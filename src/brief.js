@@ -33,6 +33,10 @@ function buildBrief(store, { project, task, assignment, runId }) {
       const recent = String(journal.body).split('\n').filter((l) => /^(- \d\d:\d\d|### |\*\*(Asked|Outcome))/.test(l)).slice(-8);
       if (recent.length) lines.push(`### Recent agent work on this project (from ${journal.id})`, '', ...recent.map((l) => clip(l, 180)), '');
     }
+    try {
+      const exp = require('./experience').briefLines(require('./experience').digest(store, p.slug));
+      if (exp.length) lines.push('### Learned from earlier sessions (experience digest)', '', ...exp, '');
+    } catch { /* optional */ }
   }
   // system memories (notes/ root, no project) apply to every project
   const sys = store.list('note', { scope: 'system' }).filter((r) => !r.meta.agent_journal);
