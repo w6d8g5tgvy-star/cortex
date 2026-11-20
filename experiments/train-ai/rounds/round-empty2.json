@@ -1,0 +1,56 @@
+{
+  "summary": {
+    "round": "empty",
+    "model": "claude-haiku-5-5",
+    "trials": 1,
+    "snapshot": null,
+    "passes": 1,
+    "runs": 2,
+    "pass_rate": 0.5,
+    "run_cost": 0.0054,
+    "training_cost": 0,
+    "total_cost": 0.0054,
+    "E": 184.2,
+    "avg_turns": 5,
+    "out_tokens": 2410,
+    "in_tokens": 122584,
+    "avg_seconds": 12.1,
+    "by_task": {
+      "mesh": "0/1",
+      "connector": "1/1"
+    }
+  },
+  "date": "2026-11-20T23:07:21.012Z",
+  "runs": [
+    {
+      "task": "connector",
+      "trial": 1,
+      "pass": true,
+      "passed": 3,
+      "total": 3,
+      "failures": [],
+      "ms": 9014,
+      "cost": 0.0016263200000000001,
+      "turns": 1,
+      "out_tokens": 646,
+      "in_tokens": 15877
+    },
+    {
+      "task": "mesh",
+      "trial": 1,
+      "pass": false,
+      "passed": 1,
+      "total": 4,
+      "failures": [
+        "[20000] → {\"action\":\"decimate\",\"min\":5000,\"max\":10000}",
+        "[20001] → {\"action\":\"decimate\",\"min\":5000,\"max\":10000}",
+        "[600000] → {\"action\":\"decimate\",\"min\":5000,\"max\":10000}"
+      ],
+      "ms": 15136,
+      "cost": 0.0038026500000000003,
+      "turns": 9,
+      "out_tokens": 1764,
+      "in_tokens": 106707
+    }
+  ]
+}

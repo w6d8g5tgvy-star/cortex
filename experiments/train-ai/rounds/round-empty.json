@@ -1,0 +1,198 @@
+{
+  "summary": {
+    "round": "empty",
+    "model": "claude-haiku-5-5",
+    "trials": 1,
+    "snapshot": null,
+    "passes": 2,
+    "runs": 10,
+    "pass_rate": 0.2,
+    "run_cost": 0.0386,
+    "training_cost": 0,
+    "total_cost": 0.0386,
+    "E": 51.78,
+    "avg_turns": 5.9,
+    "out_tokens": 13642,
+    "in_tokens": 645697,
+    "avg_seconds": 13.7,
+    "by_task": {
+      "journal": "0/1",
+      "port262": "0/1",
+      "scope": "0/1",
+      "udim": "1/1",
+      "invoke": "0/1",
+      "publish": "0/1",
+      "pairing": "0/1",
+      "local": "1/1",
+      "update": "0/1",
+      "skills": "0/1"
+    }
+  },
+  "date": "2026-11-20T23:06:40.876Z",
+  "runs": [
+    {
+      "task": "invoke",
+      "trial": 1,
+      "pass": false,
+      "passed": 0,
+      "total": 3,
+      "failures": [
+        "[\"buyRemote\",\"buyItem\",\"return true\"] → \"local function buyItem(player, ...)\\n\\tlocal args = table.pack(...)\\nreturn true\\nend\\n\\nbuyRemote.OnServerInvoke = function(player, ...)\\n\\tlocal ok, result =",
+        "[\"Remotes.Launch\",\"launchMissile\",\"return fire(player)\"] → \"local function launchMissile(player, ...)\\n\\tlocal args = table.pack(...)\\nreturn fire(player)\\nend\\n\\nRemotes.Launch.OnServerInvoke = function(player, ...)\\n\\",
+        "[\"ascendFn\",\"doAscend\",\"local ok = ascend(player)\\nreturn ok\"] → \"local function doAscend(player, ...)\\n\\tlocal args = table.pack(...)\\nlocal ok = ascend(player)\\nreturn ok\\nend\\n\\nascendFn.OnServerInvoke = function(player, ."
+      ],
+      "ms": 15105,
+      "cost": 0.0053010900000000005,
+      "turns": 6,
+      "out_tokens": 1774,
+      "in_tokens": 70742
+    },
+    {
+      "task": "journal",
+      "trial": 1,
+      "pass": false,
+      "passed": 0,
+      "total": 6,
+      "failures": [
+        "[{\"time\":\"2026-11-20T14:05:00\",\"agent\":\"claude-code\",\"status\":\"done\",\"source\":\"started from Cortex\"}] → \"## 2026-11-20 14:05 · claude-code · done (started from Cortex)\" (want \"### 14:05 · claude-code · ✓ finished (started from Cortex)\")",
+        "[{\"time\":\"2026-11-20T09:30:00\",\"agent\":\"codex\",\"status\":\"error\"}] → \"## 2026-11-20 09:30 · codex · error\" (want \"### 09:30 · codex · ✗ failed\")",
+        "[{\"time\":\"2026-11-20T23:59:00\",\"agent\":\"claude-haiku\",\"status\":\"stopped\",\"source\":\"phone\"}] → \"## 2026-11-20 23:59 · claude-haiku · stopped (phone)\" (want \"### 23:59 · claude-haiku · ■ stopped (phone)\")",
+        "[{\"time\":\"2026-01-02T00:00:00\",\"agent\":\"gpt\",\"status\":\"done\"}] → \"## 2026-01-02 00:00 · gpt · done\" (want \"### 00:00 · gpt · ✓ finished\")",
+        "[{\"time\":\"2026-11-20T07:08:00\",\"agent\":\"\",\"status\":\"done\"}] → \"## 2026-11-20 07:08 ·  · done\" (want \"### 07:08 · agent · ✓ finished\")",
+        "[{\"time\":\"2026-11-20T12:00:00\",\"agent\":\"codex\",\"status\":\"cancelled\",\"source\":\"\"}] → \"## 2026-11-20 12:00 · codex · cancelled\" (want \"### 12:00 · codex · ■ stopped\")"
+      ],
+      "ms": 12813,
+      "cost": 0.00426828,
+      "turns": 5,
+      "out_tokens": 1226,
+      "in_tokens": 48953
+    },
+    {
+      "task": "local",
+      "trial": 1,
+      "pass": true,
+      "passed": 6,
+      "total": 6,
+      "failures": [],
+      "ms": 11646,
+      "cost": 0.00231188,
+      "turns": 3,
+      "out_tokens": 1094,
+      "in_tokens": 33268
+    },
+    {
+      "task": "pairing",
+      "trial": 1,
+      "pass": false,
+      "passed": 0,
+      "total": 3,
+      "failures": [
+        "[\"https://home.example.ts.net\",\"abc123\"] → \"https://home.example.ts.net/pair?token=abc123\"",
+        "[\"http://10.0.0.5:7777\",\"Zz9-x\"] → \"http://10.0.0.5:7777/pair?token=Zz9-x\"",
+        "[\"https://pc.example.ts.net\",\"a b&c\"] → \"https://pc.example.ts.net/pair?token=a%20b%26c\""
+      ],
+      "ms": 11233,
+      "cost": 0.0021774100000000003,
+      "turns": 3,
+      "out_tokens": 776,
+      "in_tokens": 33403
+    },
+    {
+      "task": "port262",
+      "trial": 1,
+      "pass": false,
+      "passed": 0,
+      "total": 6,
+      "failures": [
+        "does not load: Unexpected identifier 'can'"
+      ],
+      "ms": 15391,
+      "cost": 0.005530770000000001,
+      "turns": 11,
+      "out_tokens": 1601,
+      "in_tokens": 107150
+    },
+    {
+      "task": "publish",
+      "trial": 1,
+      "pass": false,
+      "passed": 1,
+      "total": 4,
+      "failures": [
+        "[\"16+\"] → [\"2-step-verification\",\"age-check\"]",
+        "[\"trusted-friends\"] → [\"2-step-verification\"]",
+        "[\"all-ages\"] → [\"2-step-verification\",\"age-check\",\"id-verification\"]"
+      ],
+      "ms": 14754,
+      "cost": 0.00265467,
+      "turns": 3,
+      "out_tokens": 1679,
+      "in_tokens": 33547
+    },
+    {
+      "task": "scope",
+      "trial": 1,
+      "pass": false,
+      "passed": 0,
+      "total": 15,
+      "failures": [
+        "[\"route-checker\"] → \"THROWS Scope decision for \\\"route-checker\\\" is not recorded in Cortex\"",
+        "[\"route-preview-overlay\"] → \"THROWS Scope decision for \\\"route-preview-overlay\\\" is not recorded in Cortex\"",
+        "[\"guided-waypoint\"] → \"THROWS Scope decision for \\\"guided-waypoint\\\" is not recorded in Cortex\"",
+        "[\"stats-hud\"] → \"THROWS Scope decision for \\\"stats-hud\\\" is not recorded in Cortex\"",
+        "[\"readiness-check\"] → \"THROWS Scope decision for \\\"readiness-check\\\" is not recorded in Cortex\"",
+        "[\"tool-advisor\"] → \"THROWS Scope decision for \\\"tool-advisor\\\" is not recorded in Cortex\""
+      ],
+      "ms": 15981,
+      "cost": 0.0056136499999999995,
+      "turns": 10,
+      "out_tokens": 1629,
+      "in_tokens": 107616
+    },
+    {
+      "task": "skills",
+      "trial": 1,
+      "pass": false,
+      "passed": 3,
+      "total": 5,
+      "failures": [
+        "[[\"SKILL.md\",\".cortex-managed\"]] → false",
+        "[[\".cortex-managed\",\"SKILL.md\",\"notes.md\"]] → false"
+      ],
+      "ms": 12578,
+      "cost": 0.00300965,
+      "turns": 6,
+      "out_tokens": 1214,
+      "in_tokens": 70048
+    },
+    {
+      "task": "udim",
+      "trial": 1,
+      "pass": true,
+      "passed": 5,
+      "total": 5,
+      "failures": [],
+      "ms": 16744,
+      "cost": 0.00579207,
+      "turns": 10,
+      "out_tokens": 1825,
+      "in_tokens": 108704
+    },
+    {
+      "task": "update",
+      "trial": 1,
+      "pass": false,
+      "passed": 4,
+      "total": 6,
+      "failures": [
+        "[{\"supervised\":true,\"uptimeSec\":9,\"crashed\":false}] → \"pending\"",
+        "[{\"supervised\":true,\"uptimeSec\":60,\"crashed\":false}] → \"pending\""
+      ],
+      "ms": 10793,
+      "cost": 0.00196774,
+      "turns": 2,
+      "out_tokens": 824,
+      "in_tokens": 32266
+    }
+  ]
+}
