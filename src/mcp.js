@@ -95,10 +95,12 @@ function buildTools(store) {
           ...(others.length ? { other_agents_active: others.map((p) => ({ agent: p.agent, family: p.family, last_seen: p.last_seen, project: p.project, step: p.step })) } : {}),
           ...(mind.length ? { mind_queue: mind } : {}),
           vault: store.vault,
-          projects: store.list('project', { status: ['active', 'paused'] }).map((r) => projectView(store, r)),
+          // Lean project rows (slug, title, status, open task count); project_list / project_brief give the full view.
+          projects: store.list('project', { status: ['active', 'paused'] }).map((r) => { const v = projectView(store, r); const t = v.tasks || {}; return { slug: v.slug, title: v.title, status: v.status !== 'active' ? v.status : undefined, open_tasks: (t.todo || 0) + (t.doing || 0) + (t.blocked || 0) || undefined }; }),
           open_tasks: store.list('task', { ...f, open: true, limit: 30 }).map((r) => { const t = taskView(store, r); return { id: t.id, title: t.title, status: t.status, priority: t.priority !== 'medium' ? t.priority : undefined, project: project ? undefined : t.project, assignee: t.assignee, due: t.due }; }),
           ...(project ? { project_memories: pnotes.filter((r) => !isJournal(r)).slice(0, 15).map(lean) } : {}),
-          system_memories: snotes.filter((r) => !isJournal(r)).slice(0, 12).map(lean),
+          // With a goal, the relevant passages above already carry the knowledge: list the other memories by title only.
+          system_memories: snotes.filter((r) => !isJournal(r)).slice(0, 12).map((r) => (relevant ? { id: r.id, title: r.title } : lean(r))),
           journals: [...pnotes, ...snotes].filter(isJournal).map((r) => r.id),
           memory_scopes: project ? `notes/${project}/ = this project only; notes/ = every project.` : 'No project given: only system memories (notes/) are listed. Pass project for its memories.',
           recent_activity: store.recentActivity({ project, limit: 8 }).map((a) => ({ ts: String(a.ts || '').slice(0, 16), agent: a.agent, action: a.action, summary: clipText(a.summary, 160), ref: a.ref })),
@@ -255,18 +257,19 @@ function buildTools(store) {
         type: 'object', required: ['query'],
         properties: {
           query: str('Search words'), kind: str('Limit to one kind', { enum: ['note', 'task', 'project', 'mind'] }), type: str('Note type filter'),
-          project: str('Project slug: searches that project\'s memories plus system memories'), scope: str('all = every project (default when no project is given)', { enum: ['project', 'all'] }), tag: str('Tag'), limit: { type: 'number', description: 'Max results (default 10)' },
+          project: str('Project slug: searches that project\'s memories plus system memories'), scope: str('all = every project (default when no project is given)', { enum: ['project', 'all'] }), tag: str('Tag'), limit: { type: 'number', description: 'Max results (default 6)' },
         },
       },
       run: async (a) => {
         const project = a.project ? store.resolveProject(a.project) : undefined;
         const f = project && a.scope !== 'all' ? { scope: 'project+system', projectScope: project } : {};
-        const opts = { kind: a.kind, type: a.type, tag: a.tag, limit: a.limit || 10, ...f };
+        // Default 6 (was 10): every result is written into the agent's context; the top hits now carry passages.
+        const opts = { kind: a.kind, type: a.type, tag: a.tag, limit: a.limit || 6, ...f };
         const st = settings.load(store.vault).search;
         const hits = st.semantic && fs.existsSync(require('path').join(store.vault, '.cortex', 'embeddings.json')) ? await require('./semantic').hybrid(store, a.query, opts, st.model) : store.search(a.query, opts);
         return hits
           // The top 3 note hits carry the passage that best answers the query, so the answer is usually readable right here.
-          .map((h, i) => { const p = i < 3 && h.rec.kind === 'note' ? store.passage(h.rec, a.query, 600) : ''; return { id: h.rec.id, kind: h.rec.kind, title: h.rec.title, score: h.score, ...(p ? { passage: p } : { snippet: h.snippet }), updated: h.rec.updated }; });
+          .map((h, i) => { const p = i < 3 && h.rec.kind === 'note' ? store.passage(h.rec, a.query, 600) : ''; return { id: h.rec.id, ...(h.rec.kind !== 'note' ? { kind: h.rec.kind } : {}), title: h.rec.title, score: h.score, ...(p ? { passage: p } : { snippet: h.snippet }), updated: String(h.rec.updated || '').slice(0, 10) }; });
       },
     },
     {
