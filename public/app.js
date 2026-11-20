@@ -221,7 +221,7 @@ function feedHtml(list, limit = 40) {
   return list.slice(0, limit).map((a) => `
     <div class="ev ${seen && a.ts > seen ? 'new' : ''}" ${a.ref ? `data-open="${esc(a.ref)}" style="cursor:pointer"` : ''}>
       ${avatar(a.agent)}
-      <div><div class="row" style="gap:8px"><span class="who">${esc(a.agent)}</span><span class="chip">${esc(a.action)}</span><span class="when" style="margin-left:auto">${timeAgo(a.ts)}</span></div>
+      <div><div class="row" style="gap:8px"><span class="who">${esc(a.agent)}</span>${a.model ? `<span class="chip" title="model">${esc(shortModel(a.model))}</span>` : ''}<span class="chip">${esc(a.action)}</span><span class="when" style="margin-left:auto">${timeAgo(a.ts)}</span></div>
       <div class="what">${esc(a.summary)}</div></div>
     </div>`).join('');
 }
@@ -427,6 +427,7 @@ function renderBoard() {
                 ${t.project && !fp ? `<span class="chip"><span class="pdot" style="background:${projColor(t.project)}"></span>${esc(proj(t.project)?.title || t.project)}</span>` : ''}
                 ${t.due ? `<span class="chip" style="${t.due < new Date().toISOString().slice(0, 10) && t.status !== 'done' ? 'color:var(--bad)' : ''}">${esc(t.due)}</span>` : ''}
                 ${tagChips(t.tags)}
+                ${t.model ? `<span class="chip" title="Model${t.model_agent ? ' via ' + esc(t.model_agent) : ''}">🧠 ${esc(shortModel(t.model))}</span>` : ''}
                 ${t.assignee ? `<span class="who">@${esc(t.assignee)}</span>` : ''}
               </div>
             </div>`).join('')}
@@ -483,7 +484,8 @@ async function openTask(id, defaults = {}) {
       <div class="field"><label>Details (Markdown) <span class="seg" style="float:right;text-transform:none"><button type="button" class="on" data-tm="edit">Edit</button><button type="button" data-tm="preview">Preview</button></span></label>
         <textarea class="input" id="t-body" rows="9" placeholder="Context, acceptance criteria, [[links]]…" style="font-family:var(--mono);font-size:13px">${esc(v.body || '')}</textarea>
         <div class="prose" id="t-prev" style="display:none;border:1px solid var(--line);border-radius:10px;padding:12px 14px;max-height:300px"></div></div>
-      ${t ? `<div class="small muted">Created ${timeAgo(t.created)}${t.created_by ? ' by ' + esc(t.created_by) : ''} · updated ${timeAgo(t.updated)}${t.completed ? ' · completed ' + timeAgo(t.completed) : ''}
+      ${t ? `<div class="small" style="margin-bottom:6px">Model: ${t.model ? `<span class="chip">${esc(t.model)}</span>${t.model_agent ? ` <span class="muted">via ${esc(t.model_agent)}</span>` : ''}` : '<span class="muted">not reported yet (set when an agent works on it)</span>'}</div>
+      <div class="small muted">Created ${timeAgo(t.created)}${t.created_by ? ' by ' + esc(t.created_by) : ''} · updated ${timeAgo(t.updated)}${t.completed ? ' · completed ' + timeAgo(t.completed) : ''}
         ${t.backlinks?.length ? `<br>Linked from: ${t.backlinks.map((b) => `<a href="javascript:void 0" data-open="${esc(b.id)}">${esc(b.title)}</a>`).join(', ')}` : ''}</div>` : ''}
     </div>
     <div class="modal-foot">${t ? `<button class="btn danger" id="t-del">${icon('i-trash')} Delete</button><button class="btn" data-act="send-agent" data-task="${esc(t.id)}" data-project="${esc(t.project || '')}">${icon('i-bolt')} Send to an agent</button>` : ''}<span class="spacer"></span><span class="muted small">Ctrl+Enter to save</span><button class="btn" data-close>Cancel</button><button class="btn primary" id="t-save">${t ? 'Save' : 'Create task'}</button></div>`,
@@ -1154,10 +1156,9 @@ async function renderAgents() {
     </div>` : '';
   main.innerHTML = `
     <div class="page-head"><div><div class="eyebrow">Agent control</div><h1>Your <span class="grad">agents</span></h1><p>Send agents to work from here or your phone, keep every chat organised by project, and see exactly what each one did.</p></div></div>
-    <div class="panel" style="margin-bottom:12px"><h3>AI usage</h3>
-      <p class="small muted">Everything Claude Code and Codex used on this computer (including work outside Cortex), with the Codex plan quota. Desktop and web apps don't keep local logs, so they aren't counted.</p>
+    <div class="panel" style="margin-bottom:12px"><h3>AI usage ${hint('Everything Claude Code and Codex used on this computer (including work outside Cortex), with the Codex plan quota. Desktop and web apps keep no local logs, so they are not counted.')}</h3>
       <div id="account-usage">${accountUsageHtml(HUB.usage)}</div>
-      <p class="small muted" style="margin-top:10px">Agent chats in Cortex (started here, or Claude Code sessions Cortex saw):</p>
+      <div class="small muted" style="margin-top:10px">Chats in Cortex ${hint('Agents started from Cortex, plus Claude Code sessions Cortex saw through its hooks.')}</div>
       <div id="agent-usage">${agentUsageHtml()}</div>
     </div>
     <div class="hub-grid">
@@ -1353,37 +1354,92 @@ async function renderFetcher(soft) {
   const keepForm = soft && $('#fx-form');
   const formVals = keepForm ? { topic: $('#fx-topic').value, why: $('#fx-why').value } : null;
   const c = d.settings;
+  const lv = d.usageLevels || {};
+  const LEVELS = ['low', 'medium', 'high', 'custom'];
+  const lvIndex = Math.max(0, LEVELS.indexOf(store.get('fxUsage', c.usage || 'medium')));
+  const money = (v) => (v >= 1 ? '$' + Number(v).toFixed(2) : Math.round(v * 100) + '¢');
+  const daily = Number(c.dailyBudget) || 0;
+  const spent = Number(d.spentToday) || 0;
+  const VIEW_STEPS = [0, 1000, 10000, 50000, 100000, 500000, 1000000];
   main.innerHTML = `
     <div class="page-head"><div><div class="eyebrow">Learning</div><h1><span class="grad">Fetcher</span></h1>
-      <p>Send AI agents through YouTube to learn how to do something better. A usefulness checker scores how each video would help agents do tasks, Cortex calculates whether it's worth it, and worth-it techniques are taught to every agent as a lesson in memory.</p></div></div>
-    ${d.ytdlp ? '' : `<div class="panel" style="border-color:rgba(255,195,92,.45);margin-bottom:14px"><b style="color:var(--warn)">Transcripts need yt-dlp.</b> <span class="small">Without it YouTube only gives Cortex titles and descriptions, so most videos fail the pre-check. Install it once (PowerShell): <code>winget install yt-dlp.yt-dlp</code>, then restart Cortex.</span></div>`}
-    <div class="panel" style="margin-bottom:16px">
+      <p>Agents research YouTube, vet what they find, and learn the good parts. ${hint('A planner turns your words into searches, Cortex reads the best videos (speech, chapters, screen, comments, linked pages), drops weak ones for free, an AI usefulness checker scores the rest for agent work, and worth-it techniques become a lesson every agent gets.')}</p></div>
+      <div class="fx-today" title="What Fetcher has used today (Claude's own figures)"><span class="small muted">Today</span><b>${money(spent)}</b>${daily ? `<span class="small muted">of ${money(daily)}</span><div class="meter"><span style="width:${Math.min(100, Math.round(spent / daily * 100))}%"></span></div>` : '<span class="small muted">no daily limit</span>'}</div></div>
+    <div id="fx-setup">${FX.setup ? fxSetupHtml(FX.setup) : ''}</div>
+    <div class="panel fx-panel">
       <form id="fx-form" class="modal-body" style="padding:0">
-        <div class="field"><label>What should the agents research?</label><input class="input" id="fx-topic" required placeholder="e.g. writing better prompts for coding agents" value="${esc(formVals ? formVals.topic : '')}"></div>
-        <div class="field"><label>Why (optional): what you want to get better at</label><input class="input" id="fx-why" placeholder="e.g. agents waste tokens re-reading files" value="${esc(formVals ? formVals.why : '')}"></div>
-        <div class="grid2">
-          <div class="field"><label>Project (lesson is saved there; empty = every project)</label><select class="input" id="fx-proj">${projectOptions(store.get('fxProj', ''), 'Every project (system lesson)')}</select></div>
-          <div class="field"><label>Videos to review with AI</label><input class="input" id="fx-n" type="number" min="1" max="12" value="${esc(c.maxVideos)}"></div>
-          <div class="field"><label>Usefulness checker model</label><input class="input" id="fx-model" list="fx-models" value="${esc(c.model)}"><datalist id="fx-models">${AGENT_MODELS.claude.map((mm) => `<option value="${mm}">`).join('')}</datalist></div>
+        <textarea class="input fx-ask" id="fx-topic" required rows="2" placeholder="What should the agents learn? Say it in your own words, e.g. my agents keep re-reading the same files and it burns through tokens">${esc(formVals ? formVals.topic : '')}</textarea>
+        <div class="grid2" style="margin-top:10px">
+          <input class="input" id="fx-why" placeholder="Why (optional): what you want to get better at" value="${esc(formVals ? formVals.why : '')}">
+          <select class="input" id="fx-proj" title="Where the lesson is saved">${projectOptions(store.get('fxProj', ''), 'Lesson for every project')}</select>
         </div>
-        <div class="row" style="margin-top:6px"><span class="small muted">Searches ${'≈'}4 angles of the topic, reads the best-ranked videos, drops weak ones for free, and only then spends AI on the shortlist.</span><span class="spacer"></span><button class="btn primary" type="submit">${icon('i-fetch')} Fetch</button></div>
+        <div class="fx-usage">
+          ${sliderField({ id: 'fx-usage', label: 'Usage', min: 0, max: 3, step: 1, value: lvIndex, marks: ['Low', 'Medium', 'High', 'Custom'], hint: 'How much this run may spend. Each level sets the number of videos reviewed, how deep it searches, the reviewer model, what is read, and a hard limit. Reads and reviews already done for the same question are reused for free.' })}
+          <div class="fx-usage-sum" id="fx-usage-sum"></div>
+          <div id="fx-custom" class="grid2" style="display:none">
+            ${sliderField({ id: 'fx-n', label: 'Videos reviewed by AI', min: 1, max: 12, value: c.maxVideos || 3 })}
+            ${sliderField({ id: 'fx-budget', label: 'Limit for this run', min: 0.05, max: 3, step: 0.05, value: c.perRunBudget || 0.25 })}
+            <div class="field"><label>Depth</label><div class="seg" id="fx-depth">${['quick', 'normal', 'deep'].map((k) => `<button type="button" data-v="${k}" class="${k === 'normal' ? 'on' : ''}">${k[0].toUpperCase() + k.slice(1)}</button>`).join('')}</div></div>
+            <div class="field"><label>Reviewer model</label><div class="seg" id="fx-model">${['haiku', 'sonnet', 'opus'].map((k) => `<button type="button" data-v="${k}" class="${k === (c.model || 'sonnet') ? 'on' : ''}">${k[0].toUpperCase() + k.slice(1)}</button>`).join('')}</div></div>
+          </div>
+        </div>
+        <details class="fx-adv"><summary>More options</summary>
+          <div class="grid2" style="margin-top:8px">
+            <div class="field"><label>Uploaded</label><div class="seg" id="fx-upload">${[['auto', 'Auto'], ['any', 'Any'], ['year', 'Year'], ['month', 'Month'], ['week', 'Week']].map(([k, l]) => `<button type="button" data-v="${k}" class="${k === 'auto' ? 'on' : ''}">${l}</button>`).join('')}</div></div>
+            <div class="field"><label>Length</label><div class="seg" id="fx-length">${[['auto', 'Auto'], ['any', 'Any'], ['short', '<4m'], ['medium', '4–20m'], ['long', '>20m']].map(([k, l]) => `<button type="button" data-v="${k}" class="${k === 'auto' ? 'on' : ''}">${l}</button>`).join('')}</div></div>
+            <div class="field"><label>Sort results by</label><div class="seg" id="fx-sort">${[['relevance', 'Relevance'], ['views', 'Views'], ['date', 'Newest'], ['rating', 'Rating']].map(([k, l]) => `<button type="button" data-v="${k}" class="${k === 'relevance' ? 'on' : ''}">${l}</button>`).join('')}</div></div>
+            ${sliderField({ id: 'fx-minviews', label: 'Minimum views', min: 0, max: VIEW_STEPS.length - 1, value: 0, marks: ['0', '1k', '10k', '50k', '100k', '500k', '1M'] })}
+            <textarea class="input" id="fx-queries" rows="2" placeholder="Your own searches, one per line (added to the planner's)"></textarea>
+            <div class="grid2" style="gap:8px"><textarea class="input" id="fx-inc" rows="2" placeholder="Only these channels"></textarea><textarea class="input" id="fx-exc" rows="2" placeholder="Never these channels"></textarea></div>
+          </div>
+          <div class="chip-toggles">${[['planner', 'Smart planner'], ['related', 'Related videos'], ['comments', 'Comments'], ['links', 'Linked pages'], ['frames', 'Screen frames']].map(([k, l]) => `<label class="chip-toggle"><input type="checkbox" id="fx-o-${k}" checked><span>${l}</span></label>`).join('')}</div>
+        </details>
+        <div class="row" style="margin-top:12px"><span class="spacer"></span><button class="btn primary" type="submit">${icon('i-fetch')} Fetch</button></div>
       </form>
-      ${S.local ? `<details style="margin-top:10px"><summary class="small" style="cursor:pointer">Fetcher settings</summary>
+      ${S.local ? `<details class="fx-adv" style="margin-top:6px"><summary>Fetcher settings</summary>
         <div class="grid2" style="margin-top:8px">
-          <div class="field"><label>"Worth it" from score</label><input class="input" id="fx-th" type="number" min="30" max="95" value="${esc(c.threshold)}"></div>
-          <div class="field"><label>Reviewers working at once</label><input class="input" id="fx-team" type="number" min="1" max="4" value="${esc(c.team)}"></div>
+          ${sliderField({ id: 'fx-daily', label: 'Daily limit (all runs)', min: 0, max: 10, step: 0.25, value: daily, hint: 'Once today\'s Fetcher spending reaches this, new runs wait until tomorrow. 0 = no limit.' })}
+          ${sliderField({ id: 'fx-th', label: '"Worth it" from score', min: 30, max: 95, value: c.threshold, hint: 'Videos at or above this worth-it score are taught to agents.' })}
+          ${sliderField({ id: 'fx-team', label: 'Reviewers at once (Custom)', min: 1, max: 4, value: c.team || 2 })}
+          <div class="field"><label>Default usage level</label><div class="seg" id="fx-defusage">${LEVELS.slice(0, 3).map((k) => `<button type="button" data-v="${k}" class="${k === (c.usage || 'medium') ? 'on' : ''}">${k[0].toUpperCase() + k.slice(1)}</button>`).join('')}</div></div>
+          <div class="field"><label>AI that plans and checks ${hint('Claude Code uses your Claude plan and reports real cost, so the $ limits apply. Codex uses your ChatGPT plan: no $ cost is reported, so only the number of videos limits it.')}</label><div class="seg" id="fx-reviewer">${[['claude', 'Claude'], ['codex', 'Codex']].map(([k, l]) => `<button type="button" data-v="${k}" class="${k === (c.reviewer || 'claude') ? 'on' : ''}">${l}</button>`).join('')}</div></div>
+          <div class="field" id="fx-cxm-wrap" style="${c.reviewer === 'codex' ? '' : 'display:none'}"><label>Codex model</label><select class="input" id="fx-cxm"><option value="">Codex's default</option>${c.codexModel ? `<option value="${esc(c.codexModel)}" selected>${esc(c.codexModel)}</option>` : ''}</select></div>
         </div>
-        ${toggleRow('fx-auto', c.autoRunAgentRequests, 'Run agents\' research requests without asking me', 'Off: when an agent asks Fetcher to research something, it waits here for your OK, so agents can\'t spend usage on their own.')}
+        ${toggleRow('fx-auto', c.autoRunAgentRequests, 'Run agents\' research requests without asking me', 'Off: requests from agents wait here for your OK (they default to Low usage).')}
         <div class="row"><span class="spacer"></span><button class="btn sm" id="fx-save">Save settings</button></div></details>` : ''}
     </div>
-    <div id="fx-jobs">${d.jobs.length ? d.jobs.map(fxJobHtml).join('') : '<div class="empty">No research yet. Ask for a topic above, or let an agent ask with the fetcher_request tool.</div>'}</div>`;
+    <div id="fx-jobs">${d.jobs.length ? d.jobs.map(fxJobHtml).join('') : '<div class="empty">No research yet. Ask above, or let an agent ask with fetcher_request.</div>'}</div>`;
+  // segmented buttons behave like radio groups
+  $$('.seg[id^="fx-"]').forEach((g) => $$('button', g).forEach((b) => (b.onclick = () => { $$('button', g).forEach((x) => x.classList.toggle('on', x === b)); })));
+  const segVal = (id) => ($(`#${id} button.on`) || {}).dataset?.v;
+  const showUsage = () => {
+    const k = LEVELS[Number($('#fx-usage').value)];
+    store.set('fxUsage', k);
+    $('#fx-custom').style.display = k === 'custom' ? '' : 'none';
+    const u = lv[k];
+    const who = c.reviewer === 'codex' ? `Codex${c.codexModel ? ' ' + c.codexModel : ''}` : u && u.model;
+    $('#fx-usage-sum').innerHTML = u ? [`${u.maxVideos} videos`, `${u.depth} search`, who, u.frames ? 'screen frames' : 'no frames', `limit ${money(u.budget)}`, u.estimate].map((t, i) => `<span class="chip${i === 5 ? ' ok' : ''}">${esc(t)}</span>`).join('') : '<span class="chip">You set videos, limit, depth and model below</span>';
+  };
+  bindSliders(main, { 'fx-usage': (v) => ['Low', 'Medium', 'High', 'Custom'][v], 'fx-budget': money, 'fx-daily': (v) => (v ? money(v) + ' / day' : 'off'), 'fx-minviews': (v) => (VIEW_STEPS[v] ? VIEW_STEPS[v].toLocaleString() : 'any'), 'fx-th': (v) => v + ' / 100' });
+  $$('#fx-reviewer button').forEach((b) => b.addEventListener('click', () => { const w = $('#fx-cxm-wrap'); if (w) w.style.display = b.dataset.v === 'codex' ? '' : 'none'; }));
+  $('#fx-usage').addEventListener('input', showUsage);
+  showUsage();
   $('#fx-form').onsubmit = async (e) => {
     e.preventDefault();
     store.set('fxProj', $('#fx-proj').value);
-    try { const r = await api('/api/fetcher', { method: 'POST', body: { topic: $('#fx-topic').value, why: $('#fx-why').value, project: $('#fx-proj').value || undefined, maxVideos: Number($('#fx-n').value), model: $('#fx-model').value.trim() } }); FX.open = r.id; store.set('fxOpen', r.id); toast('Fetcher started: follow it below'); $('#fx-topic').value = ''; $('#fx-why').value = ''; renderFetcher(); } catch (er) { fail(er); }
+    const lines = (sel) => $(sel).value.split('\n').map((s) => s.trim()).filter(Boolean);
+    const on = (k) => $('#fx-o-' + k).checked;
+    const usage = LEVELS[Number($('#fx-usage').value)];
+    const custom = usage === 'custom' ? { maxVideos: Number($('#fx-n').value), budget: Number($('#fx-budget').value), depth: segVal('fx-depth'), model: segVal('fx-model'), team: Number(($('#fx-team') || {}).value) || undefined } : {};
+    try {
+      const r = await api('/api/fetcher', { method: 'POST', body: { topic: $('#fx-topic').value, why: $('#fx-why').value, project: $('#fx-proj').value || undefined, usage, ...custom,
+        upload: segVal('fx-upload'), length: segVal('fx-length'), sort: segVal('fx-sort'), minViews: VIEW_STEPS[Number($('#fx-minviews').value)] || 0,
+        queries: lines('#fx-queries'), includeChannels: lines('#fx-inc'), excludeChannels: lines('#fx-exc'), planner: on('planner'), related: on('related'), comments: on('comments'), links: on('links'), frames: on('frames') } });
+      FX.open = r.id; store.set('fxOpen', r.id); toast('Fetcher started: follow it below'); $('#fx-topic').value = ''; $('#fx-why').value = ''; renderFetcher();
+    } catch (er) { fail(er); }
   };
   const sv = $('#fx-save');
-  if (sv) sv.onclick = async () => { try { await api('/api/fetcher/settings', { method: 'POST', body: { threshold: Number($('#fx-th').value), team: Number($('#fx-team').value), model: $('#fx-model').value.trim(), maxVideos: Number($('#fx-n').value), autoRunAgentRequests: !!($('[data-setting="fx-auto"]') || {}).checked } }); toast('Fetcher settings saved'); renderFetcher(); } catch (er) { fail(er); } };
+  if (sv) sv.onclick = async () => { try { await api('/api/fetcher/settings', { method: 'POST', body: { threshold: Number($('#fx-th').value), team: Number($('#fx-team').value), dailyBudget: Number($('#fx-daily').value), usage: segVal('fx-defusage'), reviewer: segVal('fx-reviewer'), codexModel: ($('#fx-cxm') || {}).value || '', autoRunAgentRequests: !!($('[data-setting="fx-auto"]') || {}).checked } }); toast('Fetcher settings saved'); renderFetcher(); } catch (er) { fail(er); } };
   $$('[data-fxopen]').forEach((b) => (b.onclick = () => { FX.open = FX.open === b.dataset.fxopen ? '' : b.dataset.fxopen; store.set('fxOpen', FX.open); renderFetcher(true); }));
   $$('[data-fxok]').forEach((b) => (b.onclick = async () => { await api('/api/fetcher/approve', { method: 'POST', body: { id: b.dataset.fxok, reject: b.dataset.no === '1' } }).catch(fail); renderFetcher(); }));
   $$('[data-fxrescore]').forEach((b) => (b.onclick = async () => { await api('/api/fetcher/rescore', { method: 'POST', body: { id: b.dataset.fxrescore } }).then((r) => toast(r.lesson ? 'Re-scored: lesson updated' : 'Re-scored: still nothing worth it')).catch(fail); renderFetcher(); }));
@@ -1391,9 +1447,68 @@ async function renderFetcher(soft) {
   $$('[data-fxteach]').forEach((b) => (b.onclick = async () => { await api('/api/fetcher/teach', { method: 'POST', body: { id: b.dataset.fxteach, videoId: b.dataset.vid } }).then(() => toast('Added to the lesson')).catch(fail); renderFetcher(true); }));
   $$('[data-open]', main).forEach((b) => (b.onclick = () => openItem(b.dataset.open)));
   if (FX.open && d.jobs.some((j) => j.id === FX.open)) fxLoadDetail(FX.open);
+  fxSetup(!soft);
+}
+// Readiness: what Fetcher needs on this computer, with one-click installs (checked at most once a minute).
+async function fxSetup(force) {
+  const box = $('#fx-setup');
+  if (!box) return;
+  if (force || !FX.setup || Date.now() - FX.setupAt > 60000) {
+    try { FX.setup = await api('/api/fetcher/setup'); FX.setupAt = Date.now(); } catch { return; }
+  }
+  const el = $('#fx-setup');
+  if (!el) return;
+  el.innerHTML = fxSetupHtml(FX.setup);
+  $$('[data-fxinstall]', el).forEach((b) => (b.onclick = () => fxInstall(b.dataset.fxinstall)));
+  $$('[data-fxcmd]', el).forEach((b) => (b.onclick = () => copy(b.dataset.fxcmd)));
+  const re = $('#fx-recheck', el); if (re) re.onclick = () => fxSetup(true);
+  // Codex choices come from Codex itself; the Codex option is off until Codex is installed and signed in.
+  const cxOk = (FX.setup.items.find((i) => i.key === 'codex') || {}).ok;
+  const cxBtn = $('#fx-reviewer button[data-v="codex"]');
+  if (cxBtn && !cxOk) { cxBtn.disabled = true; cxBtn.title = 'Install Codex and sign in first (see the setup panel above)'; }
+  const sel = $('#fx-cxm');
+  if (sel && FX.setup.codexModels && FX.setup.codexModels.length && sel.options.length <= 2) {
+    const cur = (FX.data.settings || {}).codexModel || '';
+    sel.innerHTML = `<option value="">Codex's default (${esc(FX.setup.codexModels[0].slug)})</option>` + FX.setup.codexModels.map((m) => `<option value="${esc(m.slug)}"${m.slug === cur ? ' selected' : ''} title="${esc(m.description)}">${esc(m.name)}: ${esc(m.description)}</option>`).join('');
+  }
+  if (FX.setup.install && FX.setup.install.running) fxInstallPoll();
+}
+function fxSetupHtml(s) {
+  const inst = s.install;
+  const rows = s.items.map((i) => {
+    const state = i.ok ? `<span class="chip ok">${esc(i.version || (i.signedIn ? 'signed in' : 'ready'))}</span>`
+      : i.installed ? '<span class="chip warn">not signed in</span>' : `<span class="chip${i.required ? ' warn' : ''}">${i.required ? 'missing' : 'not installed'}</span>`;
+    const busy = inst && inst.running && inst.key === i.key;
+    const action = i.ok ? '' : i.canInstall && s.local
+      ? `<button class="btn sm primary" data-fxinstall="${i.key}"${inst && inst.running ? ' disabled' : ''}>${busy ? 'Installing…' : 'Install'}</button>`
+      : `<button class="btn sm" data-fxcmd="${esc(i.command)}" title="${esc(i.command)}">Copy command</button>`;
+    return `<div class="fx-need${i.ok ? ' ok' : ''}"><span class="dot ${i.ok ? 'ok' : i.required ? 'bad' : ''}"></span><b>${esc(i.label)}</b>${i.required ? '' : ' <span class="small muted">optional</span>'} ${hint(i.why)}<span class="spacer"></span>${state}${action}</div>`;
+  }).join('');
+  const log = inst && (inst.running || inst.ok === false) ? `<pre class="fx-log">${esc(inst.log || '')}</pre>` : '';
+  const missing = s.items.filter((i) => i.required && !i.ok).length;
+  const head = s.ready ? `<span class="dot ok"></span> Ready on this computer` : `<span class="dot bad"></span> ${missing} thing${missing === 1 ? '' : 's'} to set up before Fetcher works well`;
+  return `<details class="panel fx-setup"${s.ready && !log ? '' : ' open'}><summary>${head}<span class="spacer"></span><span class="small muted">${s.items.filter((i) => i.ok).length}/${s.items.length}</span></summary>
+    <div class="fx-needs">${rows}</div>${log}
+    <div class="row" style="margin-top:8px"><span class="small muted">${s.installer ? `Installs use ${s.installer}.` : s.platform === 'linux' ? 'Copy each command into a terminal.' : 'Install winget (Windows) or Homebrew (Mac) for one-click installs.'}</span><span class="spacer"></span><button class="btn sm" id="fx-recheck">Check again</button></div></details>`;
+}
+async function fxInstall(key) {
+  try { FX.setup.install = await api('/api/fetcher/install', { method: 'POST', body: { key } }); } catch (e) { return fail(e); }
+  $('#fx-setup').innerHTML = fxSetupHtml(FX.setup);
+  fxInstallPoll();
+}
+function fxInstallPoll() {
+  clearTimeout(FX.it);
+  FX.it = setTimeout(async () => {
+    let st; try { st = await api('/api/fetcher/install'); } catch { return; }
+    if (!$('#fx-setup')) return;
+    FX.setup.install = st;
+    if (st.running) { const pre = $('#fx-setup .fx-log'); if (pre) { pre.textContent = st.log; pre.scrollTop = pre.scrollHeight; } else $('#fx-setup').innerHTML = fxSetupHtml(FX.setup); return fxInstallPoll(); }
+    toast(st.ok ? 'Installed' : 'Install failed: see the log');
+    fxSetup(true);
+  }, 1500);
 }
 function fxJobHtml(j) {
-  const running = ['queued', 'searching', 'checking', 'reviewing', 'teaching'].includes(j.status);
+  const running = ['queued', 'planning', 'searching', 'checking', 'reading', 'reviewing', 'trying', 'teaching'].includes(j.status);
   const chip = j.status === 'done' ? 'ok' : j.status === 'needs-approval' ? 'warn' : j.status === 'error' ? 'bad' : '';
   return `<div class="panel fx-job" style="margin-bottom:12px">
     <div class="row" style="gap:10px;flex-wrap:wrap">${running ? '<span class="live-dot"></span>' : ''}<b style="font-size:15px">${esc(j.topic)}</b><span class="chip ${chip}">${esc(j.status === 'needs-approval' ? 'needs your OK' : j.status)}</span>
@@ -1413,16 +1528,28 @@ async function fxLoadDetail(id) {
   let j;
   try { j = await api('/api/fetcher/job?id=' + encodeURIComponent(id)); } catch { return; }
   const vids = [...j.videos].sort((a, b) => (b.score ?? -1) - (a.score ?? -1) || b.pre.score - a.pre.score);
+  const plan = j.plan || {};
+  const searches = j.searches || j.queries.map((q) => ({ q }));
+  const f = j.filters || {};
+  const readOf = (v) => [v.transcriptSource && v.transcriptSource !== 'none' ? `🗣 ${v.transcriptSource}${v.speechFixes ? ` (${v.speechFixes} terms fixed)` : ''}` : '🗣 no transcript', v.chapters ? `📑 ${v.chapters} chapters` : '', v.comments ? `💬 ${v.comments}` : '', v.links ? `🔗 ${v.links}` : '', v.frames ? `🖼 ${v.frames} frames` : '', v.skim && v.skim.moments ? `🔎 skimmed in full (${v.skim.moments} ideas found)` : v.skim && v.skim.skipped ? `🔎 not skimmed: ${v.skim.skipped}` : '', v.via ? `↪ related to "${clipS(v.via, 40)}"` : '', v.round === 2 ? 'round 2' : ''].filter(Boolean).join(' · ');
   el.innerHTML = `<div style="margin-top:10px">
-    <div class="small muted" style="margin-bottom:6px">Searches: ${j.queries.map((q) => `"${esc(q)}"`).join(', ')} → ${j.found || 0} found · reviewer ${esc(j.model || '')} · ${(j.usage.input + j.usage.output).toLocaleString()} tokens${j.usage.cost ? ` · $${j.usage.cost.toFixed(3)}` : ''}${j.report ? ` · report: <code>${esc(j.report)}</code>` : ''}</div>
+    <div class="panel" style="padding:10px 12px;margin-bottom:10px;background:rgba(255,255,255,.02)">
+      <div class="small"><b>Understood as:</b> ${esc(plan.goal || j.topic)}${plan.fallback ? ' <span class="muted">(planner unavailable: basic searches)</span>' : ''}</div>
+      ${(plan.vocabulary || []).length ? `<div class="small" style="margin-top:4px"><b>Vocabulary:</b> ${plan.vocabulary.map((w) => `<span class="chip" style="padding:0 6px">${esc(w)}</span>`).join(' ')}</div>` : ''}
+      ${(plan.must_have || []).length ? `<div class="small" style="margin-top:4px"><b>Core need:</b> ${esc(plan.must_have.join('; '))}${(plan.nice_to_have || []).length ? ` · <b>Nice to have:</b> ${esc(plan.nice_to_have.join('; '))}` : ''}${(plan.avoid || []).length ? ` · <b>Skip if:</b> ${esc(plan.avoid.join('; '))}` : ''}</div>` : ''}
+      <div class="small" style="margin-top:4px"><b>Searches:</b> ${searches.map((s) => `"${esc(s.q)}"${s.by ? ` <span class="muted">(${esc(s.by)}${s.found != null ? `, ${s.found}` : ''})</span>` : ''}`).join(', ')}</div>
+      <div class="small muted" style="margin-top:4px">Filters: uploaded ${esc(f.upload || 'any')}, length ${esc(f.length || 'any')}, sort ${esc(f.sort || 'relevance')} · ${j.found || 0} videos found${j.relatedFound ? `, ${j.relatedFound} more from related videos` : ''} · depth ${esc((j.opts || {}).depth || 'normal')}${j.missing ? ` · round 2 looked for: ${esc(j.missing)}` : ''}</div>
+      <div class="small muted" style="margin-top:4px">Models: planner ${esc((j.models || {}).planner || '—')} · checker ${esc((j.models || {}).reviewer || j.model || '')} · ${(j.usage.input + j.usage.output).toLocaleString()} tokens${j.usage.cost ? ` · $${j.usage.cost.toFixed(3)}` : ''}${j.report ? ` · report: <code>${esc(j.report)}</code>` : ''}</div>
+    </div>
     <div class="small muted" style="margin-bottom:8px">Worth-it score (calculated by Cortex) = 35% impact + 25% how often it applies + 15% confidence + 15% low effort + 10% low risk. ≥ ${j.threshold} is "worth it".</div>
     ${vids.map((v) => `<div class="fx-vid">
-      <div class="row" style="gap:8px;flex-wrap:wrap"><a href="https://www.youtube.com/watch?v=${esc(v.id)}" target="_blank" rel="noopener"><b>${esc(v.title)}</b></a><span class="small muted">${esc(v.channel || '')}${v.duration ? ' · ' + Math.round(v.duration / 60) + ' min' : ''}</span><span class="spacer"></span>
+      <div class="row" style="gap:8px;flex-wrap:wrap"><a href="https://www.youtube.com/watch?v=${esc(v.id)}" target="_blank" rel="noopener"><b>${esc(v.title)}</b></a><span class="small muted">${esc(v.channel || '')}${v.duration ? ' · ' + Math.round(v.duration / 60) + ' min' : ''}${v.uploaded ? ' · ' + esc(v.uploaded) : ''}</span><span class="spacer"></span>
         <span class="small muted" title="Free local pre-check: ${esc(v.pre.reason)}">pre ${v.pre.score}</span>
         ${v.score != null ? `<span class="fx-score"><span style="width:${v.score}%"></span></span><b>${v.score}</b><span class="chip ${VERDICT_CLS[v.verdict] || ''}">${esc(v.verdict)}</span>` : `<span class="chip">${esc(v.error ? 'review failed' : v.skipped || '—')}</span>`}</div>
-      ${v.review ? `<div class="small" style="margin-top:4px">${esc(v.review.summary)}</div>
+      <div class="small muted" style="margin-top:2px">${readOf(v)}</div>
+      ${v.review ? `<div class="small" style="margin-top:4px">${esc(v.review.summary)}${v.review.outdated ? ' <span class="chip warn">outdated</span>' : ''}${v.review.meets_request === false ? ' <span class="chip warn">off-request</span>' : ''}</div>
         <div class="small muted" style="margin-top:2px">impact ${v.review.impact} · applies ${v.review.applicability} · confidence ${v.review.confidence} · effort ${v.review.effort} · risk ${v.review.risk} — ${esc(v.review.reasoning)}</div>
-        ${v.review.techniques.length ? `<ul class="small" style="margin:6px 0 0;padding-left:18px">${v.review.techniques.map((t) => `<li><b>${esc(t.name)}</b>: when ${esc(t.when)} → ${esc(t.do)}${t.evidence ? ` <span class="muted">(${esc(t.evidence)})</span>` : ''}</li>`).join('')}</ul>` : ''}
+        ${v.review.techniques.length ? `<ul class="small" style="margin:6px 0 0;padding-left:18px">${v.review.techniques.map((t) => `<li${t.dropped ? ' style="opacity:.6"' : ''}><b>${esc(t.name)}</b>${t.dropped ? ` <span class="chip" title="${esc(t.dropped)}">dropped by tryout</span>` : t.tryout ? ` <span class="chip ok" title="${esc(t.tryout.steps)}">tried on: ${esc(clipS(t.tryout.task || '', 40))}</span>` : ''}: when ${esc(String(t.when || '').replace(/^s*whens+/i, ''))} → ${esc(t.do)}${t.dropped ? ` <span class="muted">(${esc(t.dropped)})</span>` : t.evidence ? ` <span class="muted">(${esc(t.evidence)})</span>` : ''}</li>`).join('')}</ul>` : ''}
         ${v.verdict !== 'worth it' && !v.taught && v.review.techniques.length ? `<button class="btn sm ghost" style="margin-top:4px" data-fxteach="${esc(j.id)}" data-vid="${esc(v.id)}">Teach this anyway</button>` : v.taught ? '<span class="chip ok" style="margin-top:4px">taught by you</span>' : ''}` : v.error ? `<div class="small" style="color:var(--bad)">${esc(v.error)}</div>` : `<div class="small muted">${esc(v.pre.reason)}${v.transcriptNote ? ' · ' + esc(v.transcriptNote) : ''}</div>`}
     </div>`).join('')}</div>`;
   $$('[data-fxteach]', el).forEach((b) => (b.onclick = async () => { await api('/api/fetcher/teach', { method: 'POST', body: { id: b.dataset.fxteach, videoId: b.dataset.vid } }).then(() => toast('Added to the lesson')).catch(fail); renderFetcher(true); }));
@@ -1642,7 +1769,7 @@ const AIW = { data: null, timer: null, listTimer: null, big: '', urls: {}, showI
 const familyOf = (name) => { const n = String(name || '').toLowerCase(); if (/anthropic|claude/.test(n)) return 'claude'; if (/openai|chatgpt|gpt|codex/.test(n)) return 'openai'; if (/cursor/.test(n)) return 'cursor'; return n; };
 function aiwPanelHtml() {
   const d = AIW.data;
-  const head = `<h3>${icon('i-live')} AI windows <span class="small muted" style="text-transform:none;letter-spacing:0;font-weight:400">what each AI app on this computer is showing right now</span>
+  const head = `<h3>${icon('i-live')} AI windows ${hint('A live view of each AI app window while an agent is working in it. Only AI windows (and ones you choose) are ever captured, and only while screen sharing is on.')}
     ${S.local ? '<span style="margin-left:auto"><button class="btn sm" id="aiw-pick">+ Watch another window</button></span>' : ''}</h3>`;
   if (!d) return head + '<div class="small muted">Looking for AI apps…</div>';
   if (!d.supported) return head + '<div class="empty">Window view works on Windows for now. The screen view above still shows everything.</div>';
@@ -1652,7 +1779,7 @@ function aiwPanelHtml() {
   const idle = d.windows.filter((w) => !w.active);
   const idleToggle = idle.length ? `<label class="small muted" style="display:inline-flex;gap:6px;align-items:center;margin-top:8px;cursor:pointer"><input type="checkbox" id="aiw-idle" ${AIW.showIdle ? 'checked' : ''}> Also show idle AI apps (${idle.length}: ${esc(idle.map((w) => w.app).join(', '))})</label>` : '';
   if (!d.windows.length) return head + '<div class="empty">No AI app windows are open. Cortex looks for Claude, ChatGPT, Codex, Cursor, Windsurf, VS Code, terminals running Claude Code or Codex, and browser tabs on AI sites (the tab must be the active one). Use <b>Watch another window</b> for anything else.</div>';
-  if (!shown.length) return head + `<div class="empty">No agent is working in an AI app right now. A window shows up here while an agent is working in it (Cortex sees its session as active).</div>${idleToggle}`;
+  if (!shown.length) return head + `<div class="empty">No agent is working in an AI app right now.</div>${idleToggle}`;
   return head + `<div class="aiw-grid">${shown.map((w) => `<div class="aiw-tile ${AIW.big === w.id ? 'big' : ''}" data-aiw="${esc(w.id)}">
       <div class="aiw-head"><span class="chip">${esc(w.app)}</span><span class="aiw-title" title="${esc(w.title)}">${esc(w.title)}</span>${w.kind === 'watched' && S.local ? `<button class="btn ghost sm" data-unwatch="${esc(w.process)}" data-unwatch-title="${esc((d.watch.find((x) => x.process.toLowerCase() === w.process.toLowerCase()) || {}).title || '')}" title="Stop watching">${icon('i-x')}</button>` : ''}</div>
       <div class="aiw-img">${w.minimized ? '<div class="aiw-msg">Minimized: restore the window to see it</div>' : `<img alt="${esc(w.app)} window"><div class="aiw-msg">Loading…</div>`}</div>
@@ -1886,7 +2013,25 @@ function linkAppsHtml(st, c) {
     <p class="small muted" style="margin:8px 0 0">${st.connector.provider === 'tailscale' ? 'Your permanent link never changes: add it once per app.' : 'The quick link changes whenever Cortex restarts or updates. Use the permanent link (Tailscale) so you only add it once.'} Keep just <b>one</b> Cortex connector per app and delete old ones that point at dead links.</p>
   </div>`;
 }
-const toggleRow = (id, on, title, desc, disabled) => `<label class="toggle-row ${disabled ? 'disabled' : ''}"><div><b>${title}</b><div class="small muted">${desc}</div></div><input type="checkbox" class="switch" data-setting="${id}" ${on ? 'checked' : ''} ${disabled ? 'disabled' : ''}></label>`;
+// Settings switches: the title, with the longer explanation behind an ⓘ (hover, or tap on a phone).
+const toggleRow = (id, on, title, desc, disabled) => `<label class="toggle-row ${disabled ? 'disabled' : ''}"><div><b>${title}</b>${desc ? ' ' + hint(desc) : ''}</div><input type="checkbox" class="switch" data-setting="${id}" ${on ? 'checked' : ''} ${disabled ? 'disabled' : ''}></label>`;
+// A small ⓘ that shows its text on hover (and as a toast when tapped), instead of a paragraph on the page.
+function hint(text) { return `<span class="hint" tabindex="0" title="${esc(String(text).replace(/<[^>]+>/g, ''))}">i</span>`; }
+document.addEventListener('click', (e) => { const h = e.target.closest && e.target.closest('.hint'); if (h) { e.preventDefault(); e.stopPropagation(); toast(h.getAttribute('title')); } }, true);
+// A slider with its value shown live, used across the site instead of number boxes.
+function sliderField({ id, label, min, max, step = 1, value, marks, hint: tip }) {
+  return `<div class="field slider-field"><label>${label}${tip ? ' ' + hint(tip) : ''}<output class="slider-out" id="${id}-out"></output></label>
+    <input type="range" class="slider" id="${id}" min="${min}" max="${max}" step="${step}" value="${esc(value)}">
+    ${marks ? `<div class="slider-marks">${marks.map((m) => `<span>${esc(m)}</span>`).join('')}</div>` : ''}</div>`;
+}
+/** Live value labels and the filled part of each slider's track. fmts: { sliderId: value => text }. */
+function bindSliders(root = document, fmts = {}) {
+  $$('input.slider', root).forEach((el) => {
+    const out = root.querySelector('#' + CSS.escape(el.id) + '-out');
+    const paint = () => { const p = ((el.value - el.min) / ((el.max - el.min) || 1)) * 100; el.style.setProperty('--p', p + '%'); if (out) out.textContent = (fmts[el.id] || ((v) => v))(Number(el.value)); };
+    el.addEventListener('input', paint); paint();
+  });
+}
 function updStatus(up) {
   if (!up) return '';
   const p = up.pending;
@@ -1963,7 +2108,7 @@ async function renderSettings() {
         ${toggleRow('approvals', st.agents.phoneApprovals, 'Approve permission requests from Cortex', 'When Claude Code wants permission (run a command, edit a file), the request appears on Live and on your phone with Allow and Deny buttons. With no answer within 2 minutes, it asks on the computer as usual.', !L)}
         ${L ? `<div class="field"><label>Allowed folders (one per line)</label><textarea class="input" id="ag-folders" rows="3" placeholder="C:\\Users\\you\\Desktop\\SkyBlock Macros">${esc((st.agents.folders || []).join('\n'))}</textarea></div>
           <div class="grid2" style="margin-top:10px"><div class="field"><label>Permissions for started agents</label><select class="input" id="ag-perm">${opts(['default', 'acceptEdits', 'bypassPermissions'], st.agents.permission, { default: 'Ask first (read-only unless allowed)', acceptEdits: 'May edit files', bypassPermissions: 'Full access (dangerous)' })}</select></div>
-          <div class="field"><label>Time limit per run (minutes)</label><input class="input" id="ag-max" type="number" min="5" max="600" value="${esc(st.agents.maxMinutes)}"></div></div>
+          ${sliderField({ id: 'ag-max', label: 'Time limit per run', min: 5, max: 600, step: 5, value: st.agents.maxMinutes, marks: ['5 min', '5 h', '10 h'] })}</div>
           <div class="field" style="margin-top:10px"><label>Standing instructions for every agent</label><textarea class="input" id="ag-ins" rows="3" placeholder="e.g. Explain things simply. Never push to git without asking.">${esc(st.agents.instructions || '')}</textarea></div>
           <div class="row" style="margin-top:10px"><span class="spacer"></span><button class="btn primary" id="ag-save">Save</button></div>` : ''}
       </div>
@@ -2018,6 +2163,7 @@ async function renderSettings() {
     draw();
   }
   const on = (id, fn) => { const el = $('#' + id); if (el) el.onclick = fn; };
+  bindSliders(main, { 'ag-max': (v) => (v >= 60 ? `${Math.floor(v / 60)} h${v % 60 ? ' ' + (v % 60) + ' min' : ''}` : `${v} min`) });
   on('restart-now', () => api('/api/restart', { method: 'POST' }).then((r) => (r.restarting ? showRestarting() : toast('Restart Cortex manually'))).catch(fail));
   on('rotate', async () => { if (!confirm('Unpair all phones and devices? You will need to scan a new QR code.')) return; await api('/api/settings', { method: 'POST', body: { rotateToken: true } }).catch(fail); renderSettings(); });
   on('scr-test', () => modal(`<div class="modal-head"><h2>Screen capture test</h2><button class="btn ghost sm" data-close>${icon('i-x')}</button></div><div class="modal-body"><img src="/api/screen?t=${Date.now()}" style="width:100%;border-radius:10px;border:1px solid var(--line)" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'empty',textContent:'Capture failed. See the notes in Settings.'}))"></div>`));

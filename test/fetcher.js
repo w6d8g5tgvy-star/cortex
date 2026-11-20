@@ -135,7 +135,7 @@ const waitDone = async (f, id) => { for (let i = 0; i < 200; i++) { const j = f.
 
   // report: readable file, not loaded as a memory
   assert.ok(done.report && fs.existsSync(path.join(vault, done.report)));
-  assert.ok(/\| Video \| Pre-check \| Worth-it \| Verdict/.test(fs.readFileSync(path.join(vault, done.report), 'utf8')));
+  assert.ok(/\| Video \| Found by \| Read \| Pre-check \| Worth-it \| Verdict/.test(fs.readFileSync(path.join(vault, done.report), 'utf8')));
   store.scan(false);
   assert.ok(!store.list('note').some((n) => /Fetcher report/.test(n.title)), 'reports are not memories (no token cost)');
   ok('report with every video, score and reason saved in fetcher/ (readable in Obsidian, not loaded into agents)');

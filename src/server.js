@@ -252,10 +252,16 @@ function startServer({ store, port, host, token: cliToken }) {
     if (session && (session.local !== local || session.transport !== (connector ? 'connector' : 'http'))) {
       return send(res, 403, { error: 'Invalid MCP session for this connection' });
     }
-    if (!session) session = { transport: connector ? 'connector' : 'http', local, agent: String(req.headers['x-agent-name'] || 'http-agent').slice(0, 60) };
+    if (!session) {
+      // An app still using a session Cortex no longer knows (e.g. from before an older restart): keep ONE record for
+      // that session id, so its calls share one card and name instead of a new "http-agent" card per call.
+      session = { transport: connector ? 'connector' : 'http', local, agent: String(req.headers['x-agent-name'] || (connector ? 'connector app' : 'http-agent')).slice(0, 60), created: Date.now() };
+      if (sid && /^[\w-]{8,100}$/.test(sid)) { session.id = 'mcp-' + sid.slice(0, 12); mcpSessions.set(sid, session); }
+    }
     if (mcpSessions.size > 500) mcpSessions.delete(mcpSessions.keys().next().value);
+    const before = session.model;
     const out = await mcp.handle(msg, session);
-    if (isInit) saveMcpSessions();
+    if (isInit || session.model !== before) saveMcpSessions();
     if (!out) { res.writeHead(202, headers); return res.end(); }
     return send(res, 200, out, headers);
   }
@@ -266,7 +272,7 @@ function startServer({ store, port, host, token: cliToken }) {
     clearTimeout(saveMcpSessions.t);
     saveMcpSessions.t = setTimeout(() => {
       try {
-        const keep = [...mcpSessions.entries()].slice(-200).filter(([, s]) => s.agent).map(([k, s]) => [k, { transport: s.transport, id: s.id, local: s.local, created: s.created, agent: s.agent }]);
+        const keep = [...mcpSessions.entries()].slice(-200).filter(([, s]) => s.agent).map(([k, s]) => [k, { transport: s.transport, id: s.id, local: s.local, created: s.created, agent: s.agent, model: s.model }]);
         const f = path.join(vault, '.cortex', 'mcp-sessions.json');
         fs.writeFileSync(f + '.tmp', JSON.stringify(Object.fromEntries(keep)));
         fs.renameSync(f + '.tmp', f);
@@ -420,8 +426,22 @@ function startServer({ store, port, host, token: cliToken }) {
     // ---- Fetcher: YouTube research + usefulness checker ----
     if (p === '/api/fetcher' && m === 'GET') {
       const ytdlp = !!(process.env.CORTEX_YTDLP || await require('./media').which('yt-dlp'));
-      return send(res, 200, { jobs: fetcher.list().slice(0, 40).map((j) => fetcher.summary(j)), settings: fetcher.conf(), ytdlp });
+      const { USAGE } = require('./fetcher');
+      return send(res, 200, { jobs: fetcher.list().slice(0, 40).map((j) => fetcher.summary(j)), settings: fetcher.conf(), ytdlp, usageLevels: Object.fromEntries(Object.entries(USAGE).map(([k, u]) => [k, { label: u.label, estimate: u.estimate, budget: u.budget, maxVideos: u.maxVideos, depth: u.depth, model: u.model, frames: u.frames }])), spentToday: fetcher.spentToday() });
     }
+    if (p === '/api/fetcher/setup' && m === 'GET') {
+      const setup = require('./setup');
+      const st = await setup.check(runner);
+      const cx = st.items.find((i) => i.key === 'codex');
+      const codexModels = cx && cx.ok ? await require('./fetcher').codexModels(runner) : [];
+      return send(res, 200, { ...st, codexModels, install: setup.status(), local });
+    }
+    if (p === '/api/fetcher/install' && m === 'POST') {
+      if (!localOnly()) return;
+      const b = await json();
+      try { return send(res, 200, require('./setup').install(String(b.key || ''))); } catch (e) { return send(res, 400, { error: e.message }); }
+    }
+    if (p === '/api/fetcher/install' && m === 'GET') return send(res, 200, require('./setup').status() || {});
     if (p === '/api/fetcher/job' && m === 'GET') {
       const j = fetcher.get(u.searchParams.get('id'));
       return j ? send(res, 200, j) : send(res, 404, { error: 'Not found' });
@@ -430,7 +450,8 @@ function startServer({ store, port, host, token: cliToken }) {
       const b = await json();
       try {
         const project = b.project ? store.resolveProject(b.project) : undefined;
-        return send(res, 201, fetcher.summary(fetcher.create({ topic: b.topic, why: b.why, project, maxVideos: b.maxVideos, model: b.model, queries: b.queries, from: agent })));
+        const { topic, why, maxVideos, model, queries, depth, upload, length, sort, minViews, includeChannels, excludeChannels, related, planner, comments, links, frames, usage, budget, team, maxFrames } = b;
+        return send(res, 201, fetcher.summary(fetcher.create({ topic, why, project, maxVideos, model, queries, depth, upload, length, sort, minViews, includeChannels, excludeChannels, related, planner, comments, links, frames, usage, budget, team, maxFrames, from: agent })));
       } catch (e) { return send(res, 400, { error: e.message }); }
     }
     if (p === '/api/fetcher/approve' && m === 'POST') {
@@ -452,12 +473,19 @@ function startServer({ store, port, host, token: cliToken }) {
       const cur = fetcher.conf();
       const next = {
         model: b.model !== undefined ? (String(b.model).trim() || 'sonnet') : cur.model,
+        plannerModel: b.plannerModel !== undefined ? (String(b.plannerModel).trim() || 'haiku') : (cur.plannerModel || 'haiku'),
         maxVideos: b.maxVideos !== undefined ? Math.max(1, Math.min(12, Number(b.maxVideos) || 5)) : cur.maxVideos,
         team: b.team !== undefined ? Math.max(1, Math.min(4, Number(b.team) || 3)) : cur.team,
         threshold: b.threshold !== undefined ? Math.max(30, Math.min(95, Number(b.threshold) || 60)) : cur.threshold,
         autoRunAgentRequests: b.autoRunAgentRequests !== undefined ? !!b.autoRunAgentRequests : cur.autoRunAgentRequests,
+        usage: ['low', 'medium', 'high', 'custom'].includes(b.usage) ? b.usage : cur.usage,
+        perRunBudget: b.perRunBudget !== undefined ? Math.max(0, Math.min(100, Number(b.perRunBudget) || 0)) : cur.perRunBudget,
+        dailyBudget: b.dailyBudget !== undefined ? Math.max(0, Math.min(1000, Number(b.dailyBudget) || 0)) : cur.dailyBudget,
+        reviewer: b.reviewer !== undefined ? (b.reviewer === 'codex' ? 'codex' : 'claude') : (cur.reviewer || 'claude'),
+        codexModel: b.codexModel !== undefined ? String(b.codexModel).trim().slice(0, 60) : (cur.codexModel || ''),
       };
-      require('./agents').cleanModel(next.model);
+      require('./agents').cleanModel(next.model); require('./agents').cleanModel(next.plannerModel);
+      if (next.codexModel) require('./agents').cleanModel(next.codexModel);
       settingsMod.update(vault, { fetcher: next });
       return send(res, 200, next);
     }

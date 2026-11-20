@@ -248,6 +248,22 @@ async function waitForApproval(vault, sid, input) {
   return null; // fall back to the normal dialog
 }
 
+/** A Cortex task tool (task_create / task_update, under any server name) just ran: record the model on that task. */
+function stampTask(vault, input, model) {
+  try {
+    const name = String(input.tool_name || '');
+    if (!/^mcp__.+__task_(create|update)$/.test(name)) return;
+    let reply = input.tool_response;
+    try { reply = typeof reply === 'string' ? reply : JSON.stringify(reply); } catch { reply = ''; }
+    const m = String(reply || '').match(/\\?"id\\?"\s*:\s*\\?"(tasks\/[^"\\]+)/);
+    const id = m ? m[1] : (input.tool_input && /^tasks\//.test(String(input.tool_input.id || '')) ? String(input.tool_input.id) : null);
+    if (!id) return;
+    const store = loadStore(vault);
+    const t = store.get(id);
+    if (t && (t.meta.model !== model || t.meta.model_agent !== 'claude-code')) store.update(id, { model, model_agent: 'claude-code' });
+  } catch { /* best effort */ }
+}
+
 // Read Claude Code's own session log (transcript_path from the hook input) for the model and token totals.
 // Same shape as launched runs: input counts cache reads and writes, cachedInput is the cache-read part.
 function sessionUsage(transcriptPath) {
@@ -282,10 +298,16 @@ async function runHook(input, vault) {
   const base = { agent: 'claude-code', cwd: input.cwd, workspace: where };
   const existing = sessions.get(vault, id);
   const settings = require('./settings').load(vault);
+  // The model this session uses: from the hook input when Claude Code sends it, else the session log
+  // (read only while unknown, and only its last 256 KB).
+  const models = require('./models');
+  const model = models.cleanModelName(typeof input.model === 'string' ? input.model : input.model && (input.model.id || input.model.display_name))
+    || (existing && existing.model)
+    || models.claudeModelFromTranscript(input.transcript_path);
 
   if (ev === 'SessionStart') {
     const ctx = sessionContext(vault, input.cwd, input.source);
-    sessions.upsert(vault, id, { ...base, project: ctx.project, ...(existing ? {} : { title: `Claude Code in ${where}`, status: 'waiting', step: 'Session started' }) }, { kind: 'status', text: `Session ${input.source || 'started'}${ctx.project ? ` · project ${ctx.project}` : ''} · Cortex brief loaded` });
+    sessions.upsert(vault, id, { ...base, project: ctx.project, ...(model ? { model } : {}), ...(existing ? {} : { title: `Claude Code in ${where}`, status: 'waiting', step: 'Session started' }) }, { kind: 'status', text: `Session ${input.source || 'started'}${ctx.project ? ` · project ${ctx.project}` : ''} · Cortex brief loaded` });
     const cmds = commandsText(vault);
     return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: (cmds ? cmds + '\n\n' : '') + ctx.text } };
   }
@@ -293,7 +315,7 @@ async function runHook(input, vault) {
     const prompt = String(input.prompt || '').replace(/\s+/g, ' ').trim();
     const project = (existing && existing.project) || require('./journal').projectForFolder(vault, input.cwd);
     // each prompt starts a new "turn": reset what we track for the journal and the save gate
-    sessions.upsert(vault, id, { ...base, project, title: prompt.slice(0, 140) || (existing && existing.title) || 'Claude Code session', status: 'working', step: 'Thinking…', progress: null, turnPrompt: prompt.slice(0, 600), files: [], commands: 0, saved: false, gateUsed: false }, { kind: 'prompt', text: `▶ ${prompt.slice(0, 300)}` });
+    sessions.upsert(vault, id, { ...base, project, title: prompt.slice(0, 140) || (existing && existing.title) || 'Claude Code session', status: 'working', step: 'Thinking…', progress: null, turnPrompt: prompt.slice(0, 600), files: [], commands: 0, saved: false, gateUsed: false, ...(model ? { model } : {}) }, { kind: 'prompt', text: `▶ ${prompt.slice(0, 300)}` });
     const parts = [];
     try {
       const seen = (existing && existing.recalled) || {};
@@ -309,11 +331,13 @@ async function runHook(input, vault) {
   if (ev === 'PostToolUse') {
     const text = describeTool(input.tool_name, input.tool_input);
     const cur = existing || {};
-    const patch = { ...base, status: 'working', step: text, ...(existing ? {} : { title: `Claude Code in ${where}` }) };
+    const patch = { ...base, status: 'working', step: text, ...(existing ? {} : { title: `Claude Code in ${where}` }), ...(model && model !== cur.model ? { model } : {}) };
     const ti = input.tool_input || {};
     if (CHANGE_TOOLS.has(input.tool_name)) patch.files = [...new Set([...(cur.files || []), path.basename(String(ti.file_path || ti.notebook_path || ''))].filter(Boolean))].slice(-60);
     if (input.tool_name === 'Bash') patch.commands = (cur.commands || 0) + 1;
     if (isCortexSave(input)) patch.saved = true;
+    // Every task says which model worked on it: stamp tasks this session creates or updates through Cortex.
+    if (model) stampTask(vault, input, model);
     sessions.upsert(vault, id, patch, { kind: 'tool', text });
     const msgs = sessions.takeMessages(vault, id);
     return msgs.length ? { hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: formatMessages(msgs) } } : null;
@@ -363,4 +387,4 @@ async function runHook(input, vault) {
   return null;
 }
 
-module.exports = { install, uninstall, repair, status, runHook, describeTool, hookCommand, EVENTS, SAVE_TOOLS, isCortexSave, mentionedProject, sessionUsage };
+module.exports = { install, uninstall, repair, status, runHook, describeTool, hookCommand, EVENTS, SAVE_TOOLS, isCortexSave, mentionedProject, sessionUsage, stampTask };

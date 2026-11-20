@@ -20,9 +20,12 @@ Before you finish (every time)
 9. Check that everything worth keeping is saved and the tasks match reality, then call activity_log with one or two sentences: what changed, what you verified, and what is left.
 
 Rules
+- Say which model you are: pass your model name as \`model\` (e.g. "claude-opus-5-5") on your first Cortex call (cortex_start, live_update or a task tool), so every task records the model that did it.
 - Never store passwords, API keys, tokens or connector links in Cortex.
 - Say what you verified and what you did not. Never record a guess as a fact.
 - For my Mind queue (videos and articles), use mind_list, mind_fetch and mind_complete. Save good links with mind_add.
+- When you think there is a clearly better or more efficient way to do something and want to learn it properly, ask Fetcher with fetcher_request (topic in plain words, plus why). I approve it first; worth-it techniques come back as a "Lesson:" memory. Don't use it for things you already know or can look up quickly.
+- When a "Lesson:" memory shapes what you do, say which technique you used, then report with lesson_feedback whether it helped, partly helped or didn't help. Be honest: techniques that keep not helping get dropped.
 - If the Cortex tools are missing or fail, tell me once (its connector link may have changed: Cortex → Settings → Connect AI apps), keep working, and save what you would have recorded as soon as the tools are back.`;
 
 function snippets({ vault, port, host, token }) {

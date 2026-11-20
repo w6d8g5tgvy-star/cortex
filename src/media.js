@@ -305,4 +305,4 @@ function articleMarkdown(a) {
   ].join('\n');
 }
 
-module.exports = { fetchVideo, fetchArticle, videoMarkdown, articleMarkdown, youtubeId, parseCaptions, formatTranscript, htmlToText, assertPublicUrl, isPrivateIp, safeFetch, extractJsonAfter, which, toolEnv };
+module.exports = { fetchVideo, fetchArticle, videoMarkdown, articleMarkdown, youtubeId, parseCaptions, formatTranscript, htmlToText, assertPublicUrl, isPrivateIp, safeFetch, extractJsonAfter, which, toolEnv, pickTrack, ts };

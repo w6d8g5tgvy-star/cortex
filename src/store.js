@@ -460,6 +460,7 @@ class Store extends EventEmitter {
     };
     if (entry.project) e.project = String(entry.project);
     if (entry.ref) e.ref = String(entry.ref);
+    if (entry.model) e.model = String(entry.model).slice(0, 80);
     fs.mkdirSync(path.dirname(this.actFile), { recursive: true });
     fs.appendFileSync(this.actFile, JSON.stringify(e) + '\n');
     // every agent action on a project also lands in that project's agent journal
