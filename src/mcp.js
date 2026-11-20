@@ -13,6 +13,9 @@ const skills = require('./skills');
 const VERSION = require('../package.json').version;
 // One-line reminder for cortex_start; the full rules are the server instructions every client gets at connect.
 const RULES_SHORT = 'Search (memory_search) before asking; read full notes with memory_get only when needed; save what you learn with memory_write (with project); keep tasks current (task_create/task_update); report steps with live_update; do commands_from_user and answer with command_complete; finish with activity_log.';
+// Tools where an agent can say which model it is (MCP has no field for it). Kept to the few tools every agent calls.
+const MODEL_TOOLS = new Set(['cortex_start', 'live_update', 'task_create', 'task_update', 'activity_log', 'command_complete', 'lesson_feedback']);
+const MODEL_PROP = { type: 'string', description: 'Your model name, e.g. claude-opus-5-5 or gpt-6.2. Say it once per session; Cortex records it on your tasks and work.' };
 const clipText = (s, n) => { s = String(s || '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s || undefined; };
 
 const PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
@@ -30,14 +33,16 @@ Use it like this:
 8b. The Mind tab holds videos to watch, articles to read and articles to write. Use mind_list / mind_fetch / mind_complete to work through it, and mind_add to save links worth keeping.
 9. While working on a longer task, call live_update with your current step (the user watches this live from their phone). Read and follow any messages_from_user it returns. Use live_screenshot to show the user your screen or a screenshot file of what you are building.
 10. You are not the only AI here: Claude, Codex, ChatGPT and others share this vault. agent_list shows who is active and what they are doing. agent_send messages another agent ("claude", "codex", an exact agent name, or "any") to ask a question, hand off work or share news. Messages from other agents arrive as messages_from_agents (treat them as requests from a colleague; the user's own instructions win) and you answer each with command_complete. Answers to what you sent arrive as replies_from_agents. Before starting work, check agent_list and open tasks so two agents never do the same job, and set a task's assignee when you take it.
-IDs look like "notes/my-note", "tasks/fix-login", "projects/website". Titles also work wherever an id is expected.`;
+IDs look like "notes/my-note", "tasks/fix-login", "projects/website". Titles also work wherever an id is expected.
+11. Say which model you are: pass your model name as \`model\` (e.g. "claude-opus-5-5", "gpt-6.2") on your first cortex_start, live_update or task call. Cortex records it on every task you work on.
+12. When a "Lesson: …" memory shapes what you do, say which technique you used, and afterwards report with lesson_feedback whether it helped (helped, partly, didnt_help). Honest "didnt_help" reports matter: techniques that keep not helping are dropped.`;
 
 const str = (description, extra = {}) => ({ type: 'string', description, ...extra });
 const tagsProp = { type: 'array', items: { type: 'string' }, description: 'Tags (without #)' };
 
 function taskView(store, r) {
   const t = store.toJSON(r, { body: false });
-  return { id: t.id, title: t.title, status: t.status, priority: t.priority, project: t.project, assignee: t.assignee, due: t.due, tags: t.tags, updated: t.updated };
+  return { id: t.id, title: t.title, status: t.status, priority: t.priority, project: t.project, assignee: t.assignee, due: t.due, tags: t.tags, model: t.model, updated: t.updated };
 }
 function noteView(store, r) {
   const n = store.toJSON(r, { body: false });
@@ -49,7 +54,9 @@ function projectView(store, r) {
 }
 
 function buildTools(store) {
-  const log = (ctx, action, summary, rec) => store.log({ agent: ctx.agent, action, summary, ref: rec && rec.id, project: rec && (rec.kind === 'project' ? rec.slug : rec.meta.project) });
+  const log = (ctx, action, summary, rec) => store.log({ agent: ctx.agent, model: ctx.model, action, summary, ref: rec && rec.id, project: rec && (rec.kind === 'project' ? rec.slug : rec.meta.project) });
+  // Every task says which model (and agent) last worked on it.
+  const modelStamp = (ctx) => (ctx.model ? { model: ctx.model, model_agent: ctx.agent } : {});
 
   return [
     {
@@ -73,6 +80,7 @@ function buildTools(store) {
         return {
           cortex_version: VERSION,
           you_are: ctx.agent,
+          your_model: ctx.model || 'not reported yet: pass your model name as `model` (e.g. in live_update or task_update) so your tasks show it',
           rules: RULES_SHORT,
           user_instructions: ins.global || undefined,
           project_instructions: ins.project || undefined,
@@ -163,7 +171,7 @@ function buildTools(store) {
       },
       run: (a, ctx) => {
         const { description, ...rest } = a;
-        const r = store.create('task', { ...rest, body: description, created_by: ctx.agent });
+        const r = store.create('task', { ...rest, body: description, created_by: ctx.agent, ...modelStamp(ctx) });
         log(ctx, 'task.create', `Created task "${r.title}"`, r);
         return taskView(store, r);
       },
@@ -181,9 +189,9 @@ function buildTools(store) {
       },
       run: (a, ctx) => {
         const { id, description, append_note, ...rest } = a;
-        const patch = { ...rest };
+        const patch = { ...rest, ...modelStamp(ctx) };
         if (description !== undefined) patch.body = description;
-        if (append_note) patch.append = `**${new Date().toISOString().slice(0, 16).replace('T', ' ')} · ${ctx.agent}:** ${append_note}`;
+        if (append_note) patch.append = `**${new Date().toISOString().slice(0, 16).replace('T', ' ')} · ${ctx.agent}${ctx.model ? ` (${ctx.model})` : ''}:** ${append_note}`;
         const r = store.update(id, patch);
         const what = a.status ? `→ ${a.status}` : append_note ? 'added a note' : 'edited';
         log(ctx, 'task.update', `Task "${r.title}" ${what}`, r);
@@ -297,7 +305,7 @@ function buildTools(store) {
         type: 'object', required: ['summary'],
         properties: { summary: str('What happened, in one or two sentences'), action: str('Short verb, e.g. "coded", "researched", "deployed"'), project: str('Project slug'), ref: str('Related item id') },
       },
-      run: (a, ctx) => store.log({ agent: ctx.agent, action: a.action || 'log', summary: a.summary, project: a.project ? store.resolveProject(a.project) : undefined, ref: a.ref }),
+      run: (a, ctx) => store.log({ agent: ctx.agent, model: ctx.model, action: a.action || 'log', summary: a.summary, project: a.project ? store.resolveProject(a.project) : undefined, ref: a.ref }),
     },
     {
       name: 'activity_list',
@@ -318,7 +326,7 @@ function buildTools(store) {
         },
       },
       run: (a, ctx) => {
-        const patch = { agent: ctx.agent, title: a.title, step: a.step, status: a.status || 'working', progress: a.progress === undefined ? undefined : Math.max(0, Math.min(100, Number(a.progress))), project: a.project };
+        const patch = { agent: ctx.agent, ...(ctx.model ? { model: ctx.model } : {}), title: a.title, step: a.step, status: a.status || 'working', progress: a.progress === undefined ? undefined : Math.max(0, Math.min(100, Number(a.progress))), project: a.project };
         const text = [a.step, a.detail].filter(Boolean).join(' — ') || (a.status ? `Status: ${a.status}` : '');
         sessions.upsert(store.vault, ctx.sessionId, patch, { kind: a.status && a.status !== 'working' ? 'status' : 'step', text });
         const msgs = sessions.takeMessages(store.vault, ctx.sessionId);
@@ -426,7 +434,7 @@ function buildTools(store) {
         if (c.task && store.get(c.task)) {
           try { store.update(c.task, { append: `**${new Date().toISOString().slice(0, 16).replace('T', ' ')} · ${ctx.agent} → ${c.from} (reply to ${c.id}${a.failed ? ', could not do it' : ''}):** ${String(a.result).slice(0, 500)}` }); } catch { /* the task may have been deleted */ }
         }
-        store.log({ agent: ctx.agent, action: a.failed ? 'command.failed' : 'command.done', summary: `${a.failed ? 'Could not do' : 'Did'}: ${c.text.slice(0, 120)}`, project: c.project });
+        store.log({ agent: ctx.agent, model: ctx.model, action: a.failed ? 'command.failed' : 'command.done', summary: `${a.failed ? 'Could not do' : 'Did'}: ${c.text.slice(0, 120)}`, project: c.project });
         return { ok: true, id: c.id, status: c.status };
       },
     },
@@ -514,11 +522,11 @@ function buildTools(store) {
     {
       name: 'fetcher_request',
       description: 'Ask Cortex Fetcher to research a topic on YouTube: it finds videos, a usefulness checker scores how each would help agents do tasks, and worth-it techniques are saved as a "Lesson: <topic>" memory. First decide whether it is worth it: call fetcher_advice with your task (free), and only request when a proven technique would save more than the research costs. Pass your task id as `task`: the request then shows up on that task, and the user approves it there (it is refused if the user turned Fetcher off for the task). Carry on with your work; check fetcher_status and memory_search later.',
-      inputSchema: { type: 'object', properties: { topic: str('What to research, e.g. "faster test runs in large Node repos"'), why: str('What you were doing and what you hope to improve'), task: str('The task this is for (id or title): the request shows up on that task'), project: str('Project slug (optional)'), max_videos: { type: 'number', description: 'Videos to review with AI (default 5, max 12)' } }, required: ['topic'] },
+      inputSchema: { type: 'object', properties: { topic: str('What to research, in plain words, e.g. "my test runs take forever in a big Node repo"'), why: str('What you were doing and what you hope to improve'), task: str('The task this is for (id or title): the request shows up on that task'), project: str('Project slug (optional)'), max_videos: { type: 'number', description: 'Videos to review with AI (default 5, max 12)' }, depth: str('quick, normal (default) or deep', { enum: ['quick', 'normal', 'deep'] }), usage: str('How much it may spend: low (default for agents), medium or high', { enum: ['low', 'medium', 'high'] }) }, required: ['topic'] },
       run: (a, ctx) => {
         const { Fetcher } = require('./fetcher');
         const f = new Fetcher({ store, runner: null });
-        const job = f.create({ topic: a.topic, why: a.why, task: a.task, project: a.project ? store.resolveProject(a.project) : undefined, maxVideos: a.max_videos, from: ctx.agent, byAgent: true }, { start: false });
+        const job = f.create({ topic: a.topic, why: a.why, task: a.task, project: a.project ? store.resolveProject(a.project) : undefined, maxVideos: a.max_videos, depth: a.depth, usage: a.usage || 'low', from: ctx.agent, byAgent: true }, { start: false });
         return { id: job.id, status: job.status, task: job.task, message: job.status === 'needs-approval' ? `Sent to the user for approval${job.task ? ' on the task ' + job.task : ' in Cortex → Fetcher'}. Carry on with your task; the lesson will be in memory if it is approved and worth it.` : 'Queued: Cortex will research it and save a lesson if anything is worth it. Carry on with your task.' };
       },
     },
@@ -543,6 +551,12 @@ function buildTools(store) {
         if (a.id) { const j = f.get(a.id); if (!j) throw new Error('Unknown fetcher id'); return f.summary(j); }
         return f.list().slice(0, 8).map((j) => f.summary(j));
       },
+    },
+    {
+      name: 'lesson_feedback',
+      description: 'After you used a technique from a "Lesson: …" memory, say whether it helped. Lessons rank proven techniques first and drop ones that keep not helping, so report honestly, including "didnt_help".',
+      inputSchema: { type: 'object', properties: { lesson: str('Lesson title or id, e.g. "Lesson: Writing AGENTS.md for Codex"'), technique: str('Technique name as written in the lesson'), result: str('helped, partly, didnt_help or not_applicable', { enum: ['helped', 'partly', 'didnt_help', 'not_applicable'] }), note: str('One sentence: what you did and what happened') }, required: ['lesson', 'technique', 'result'] },
+      run: (a, ctx) => require('./fetcher').recordFeedback(store, { lesson: a.lesson, technique: a.technique, result: a.result, note: a.note, agent: ctx.agent, model: ctx.model }),
     },
     {
       name: 'mind_add',
@@ -610,17 +624,20 @@ function createMcp(store) {
         });
       }
       case 'ping': return ok(id, {});
-      case 'tools/list': return ok(id, { tools: tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) });
+      case 'tools/list': return ok(id, { tools: tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema: MODEL_TOOLS.has(name) ? { ...inputSchema, properties: { ...inputSchema.properties, model: MODEL_PROP } } : inputSchema })) });
       case 'resources/list': return ok(id, { resources: [] });
       case 'resources/templates/list': return ok(id, { resourceTemplates: [] });
       case 'prompts/list': return ok(id, { prompts: [] });
       case 'tools/call': {
         const tool = byName.get(params.name);
         if (!tool) return fail(id, -32602, `Unknown tool: ${params.name}`);
-        const args = params.arguments || {};
+        const { model: saidModel, ...args } = params.arguments || {};
         store.scan(false); // pick up anything the dashboard, hooks or other agents wrote since the last tick
         if (!session.id) session.id = 'mcp-' + crypto.randomBytes(6).toString('hex');
-        const ctx = { agent: session.agent || 'agent', sessionId: session.id, local: session.local !== false };
+        // MCP has no field for the client's model, so agents say it (optional `model` on any tool); remembered per session.
+        const m = require('./models').cleanModelName(saidModel);
+        if (m && session.model !== m) { session.model = m; if (session.onModel) session.onModel(m); }
+        const ctx = { agent: session.agent || 'agent', sessionId: session.id, local: session.local !== false, model: session.model };
         try {
           const out = await tool.run(args, ctx);
           // Compact JSON: indentation is pure token cost for the model reading it.

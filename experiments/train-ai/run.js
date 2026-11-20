@@ -41,7 +41,7 @@ function extractCode(text) {
 function lessonsFor(task) {
   const vault = fs.mkdtempSync(path.join(os.tmpdir(), 'train-ai-'));
   const store = new Store(vault);
-  for (const l of task.lessons) fetcher.teach(store, { topic: l.topic, threshold: 60, videos: l.sources.map((s, i) => ({ id: 'src' + i, title: s, score: 85, verdict: 'worth it', review: { techniques: l.techniques } })) });
+  for (const l of task.lessons) fetcher.teach(store, { topic: l.topic, threshold: 60, videos: l.sources.map((s, i) => ({ id: 'src' + i, title: s, score: 85, verdict: 'worth it', review: { techniques: l.techniques.map((t) => ({ evidence: 'from the source', ...t })) } })) });
   const picks = select.select(store, { text: task.prompt, max: 5, minScore: 2 });
   fs.rmSync(vault, { recursive: true, force: true });
   return picks;

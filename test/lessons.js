@@ -40,7 +40,7 @@ ok('trust comes from independent sources and the best score');
 const vault = fs.mkdtempSync(path.join(os.tmpdir(), 'cortex-lessons-'));
 const store = new Store(vault);
 store.create('project', { title: 'Shop' });
-const vid = (id, score, techniques) => ({ id, title: 'Video ' + id, score, verdict: 'worth it', review: { techniques } });
+const vid = (id, score, techniques) => ({ id, title: 'Video ' + id, score, verdict: 'worth it', review: { techniques: techniques.map((t) => ({ evidence: 'shown in the video', ...t })) } });
 const job1 = { topic: 'Claude Code testing workflow', project: 'shop', threshold: 60, videos: [
   vid('v1', 88, [
     { name: 'Tests first', when: 'adding a feature', do: 'Have Claude write failing tests first, then make them pass without changing the tests.', why: 'gives it a target' },

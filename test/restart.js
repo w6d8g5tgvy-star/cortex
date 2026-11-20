@@ -28,6 +28,7 @@ const rpc = async (body, sid) => {
     await up();
     const { sid } = await rpc({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'restart-test', version: '1' } } });
     assert.ok(sid, 'session id returned');
+    await rpc({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'live_update', arguments: { step: 'hi', model: 'restart-model-1' } } }, sid);
     await new Promise((r) => setTimeout(r, 900)); // sessions are saved shortly after initialize
     await down(srv);
     srv = start();
@@ -36,7 +37,15 @@ const rpc = async (body, sid) => {
     const acts = fs.readFileSync(path.join(vault, '.cortex', 'activity.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
     const last = acts.filter((a) => a.summary === 'after restart').pop();
     assert.equal(last && last.agent, 'restart-test');
-    console.log('  ✓ a connected app keeps its name after Cortex restarts');
+    assert.equal(last.model, 'restart-model-1', 'and its model');
+    console.log('  ✓ a connected app keeps its name and model after Cortex restarts');
+
+    // an app using a session id Cortex never saw gets ONE card, not one per call
+    const ghost = 'ghost-session-0123456789';
+    for (let i = 0; i < 3; i++) await rpc({ jsonrpc: '2.0', id: 10 + i, method: 'tools/call', params: { name: 'live_update', arguments: { step: 'step ' + i } } }, ghost);
+    const cards = fs.readdirSync(path.join(vault, '.cortex', 'sessions')).filter((f) => f.startsWith('mcp-ghost-sessi'));
+    assert.equal(cards.length, 1, `one card for an unknown session (got ${cards.length})`);
+    console.log('  ✓ an app with an unknown session gets one card instead of a new card per call');
     console.log('\nAll restart checks passed.');
   } finally {
     await down(srv).catch(() => {});

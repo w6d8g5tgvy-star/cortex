@@ -160,6 +160,21 @@ const INSTALL_HELP = {
     : 'Install Claude Code: run  curl -fsSL https://claude.ai/install.sh | bash  (or npm install -g @anthropic-ai/claude-code). Then run  claude  once to sign in, and click "Check again".',
   codex: 'Install Codex: npm install -g @openai/codex, then run  codex  once to sign in, and click "Check again".',
 };
+// The Codex desktop app (Microsoft Store) ships the CLI inside its package folder, whose name changes with
+// every update. WindowsApps can't be listed, so ask Windows where the package lives (cached for 10 minutes).
+let storeCodex = { at: 0, path: null };
+function windowsAppCodex() {
+  if (process.platform !== 'win32') return Promise.resolve(null);
+  if (Date.now() - storeCodex.at < 600e3) return Promise.resolve(storeCodex.path);
+  return new Promise((res) => execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+    "(Get-AppxPackage -Name 'OpenAI.Codex' | Sort-Object Version -Descending | Select-Object -First 1).InstallLocation"],
+  { windowsHide: true, timeout: 15000 }, (e, out) => {
+    const dir = e ? '' : String(out).trim();
+    const exe = dir ? path.join(dir, 'app', 'resources', 'codex.exe') : null;
+    storeCodex = { at: Date.now(), path: exe && fs.existsSync(exe) ? exe : null };
+    res(storeCodex.path);
+  }));
+}
 const TOOLS = {
   claude: { label: 'Claude Code', agent: 'claude-code', env: 'CORTEX_CLAUDE_BIN', name: 'claude' },
   codex: { label: 'Codex', agent: 'codex', env: 'CORTEX_CODEX_BIN', name: 'codex' },
@@ -188,6 +203,7 @@ class AgentRunner {
       if (custom) found = fs.existsSync(custom) ? custom : null;
       if (!found) { const w = await which(t.name); if (w && fs.existsSync(w)) found = w; }
       if (!found) found = CANDIDATES[k].find((c) => fs.existsSync(c)) || null;
+      if (!found && k === 'codex') found = await windowsAppCodex();
       this.resolved[k] = found;
       out[k] = { label: t.label, installed: !!found, path: found, custom: custom || null, help: found ? null : INSTALL_HELP[k] };
     }
@@ -271,11 +287,14 @@ class AgentRunner {
       args.push('-');
     }
     sessions.upsert(this.vault, id, { agent: t.agent, title, status: 'working', step: `Starting ${t.label}${model ? ` (${model})` : ''}…`, cwd, workspace: path.basename(cwd), launched: true, tool, permission, project: b.project, task: b.task, prompt: prompt.slice(0, 4000), continues, from, ...(model ? { model } : {}) }, { kind: 'prompt', text: `▶ ${(prompt || title).slice(0, 400)}` });
-    if (taskRec && taskRec.meta.status !== 'done') this.store.update(taskRec.id, { status: 'doing', assignee: t.agent });
+    // The task shows its model straight away (what was asked for), corrected to the real one when the agent reports it.
+    const expected = model || (tool === 'codex' ? require('./models').codexDefaultModel() : undefined);
+    if (taskRec && taskRec.meta.status !== 'done') this.store.update(taskRec.id, { status: 'doing', assignee: t.agent, ...(expected ? { model: expected, model_agent: t.agent } : {}) });
+    if (expected) sessions.upsert(this.vault, id, { model: expected });
     const win = process.platform === 'win32';
     // The prompt goes through stdin, never through a shell command line.
     const child = spawnAgent(this.bin(tool), args, { cwd, env: { ...process.env, CORTEX_RUN_ID: id }, detached: !win, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
-    const rec = { child, id, tool, stderr: [], ended: false, stopped: false, project: b.project, task: b.task, prompt: prompt || title, agent: t.agent };
+    const rec = { child, id, tool, stderr: [], ended: false, stopped: false, project: b.project, task: b.task, prompt: prompt || title, agent: t.agent, started: Date.now() };
     this.procs.set(id, rec);
     child.stdin.on('error', () => {});
     child.stdin.end(b.text + '\n');
@@ -297,7 +316,7 @@ class AgentRunner {
     let ev;
     try { ev = JSON.parse(line); } catch { return; }
     if (rec.tool === 'codex') {
-      if (ev.type === 'turn.completed') this.recordUsage(rec, ev.usage);
+      if (ev.type === 'turn.completed') { this.recordUsage(rec, ev.usage); if (!rec.model) this.stampModel(rec, require('./models').codexModelSince(rec.started)); }
       if (ev.type === 'item.completed' && ev.item?.type === 'agent_message' && typeof ev.item.text === 'string') {
         rec.summary = ev.item.text;
         sessions.upsert(this.vault, rec.id, { step: rec.summary.slice(0, 200) }, { kind: 'say', text: rec.summary.slice(0, 500) });
@@ -306,6 +325,7 @@ class AgentRunner {
     }
     if (ev.type === 'system' && ev.subtype === 'init') {
       sessions.upsert(this.vault, rec.id, { claude_session: ev.session_id, model: ev.model }, { kind: 'status', text: `Started${ev.model ? ` (${ev.model})` : ''}` });
+      this.stampModel(rec, ev.model);
     } else if (ev.type === 'assistant' && ev.message && Array.isArray(ev.message.content)) {
       for (const c of ev.message.content) {
         if (c.type === 'text' && c.text && c.text.trim()) {
@@ -337,10 +357,21 @@ class AgentRunner {
     sessions.upsert(this.vault, rec.id, { usage });
   }
 
+  /** The real model of a run, on its Live card and its task. */
+  stampModel(rec, model) {
+    const m = require('./models').cleanModelName(model);
+    if (!m) return;
+    rec.model = m;
+    sessions.upsert(this.vault, rec.id, { model: m });
+    try { if (rec.task && this.store.get(rec.task)) this.store.update(rec.task, { model: m, model_agent: rec.agent }); } catch { /* task gone */ }
+  }
+
   finish(rec, code, error) {
     if (rec.ended) return;
     rec.ended = true;
     this.procs.delete(rec.id);
+    // Codex doesn't print its model; its own session log has it.
+    if (rec.tool === 'codex' && !rec.reportedModel) this.stampModel(rec, require('./models').codexModelSince(rec.started));
     try { this.settle(rec, code, error); } finally {
       const s = sessions.get(this.vault, rec.id) || {};
       try { brief.recordOutcome(this.store, { project: rec.project, task: rec.task, agent: rec.agent, prompt: rec.prompt, status: rec.stopped ? 'stopped' : s.status, result: s.result || s.step, runId: rec.id, files: s.files, commands: s.commands, savedMemory: s.saved }); } catch { /* best effort */ }

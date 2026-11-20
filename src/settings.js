@@ -13,7 +13,7 @@ const DEFAULTS = () => ({
   connector: { token: '', tunnel: false, provider: 'cloudflare', lastUrl: '' },
   search: { semantic: true, model: 'nomic-embed-text' },
   backups: { daily: true },
-  fetcher: { maxVideos: 5, team: 3, model: 'sonnet', threshold: 60, autoRunAgentRequests: false },
+  fetcher: { maxVideos: 5, team: 3, model: 'sonnet', plannerModel: 'haiku', reviewer: 'claude', codexModel: '', threshold: 60, autoRunAgentRequests: false, usage: 'medium', perRunBudget: 0.25, dailyBudget: 1 },
 });
 
 function file(vault) { return path.join(vault, '.cortex', 'settings.json'); }

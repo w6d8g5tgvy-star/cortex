@@ -73,7 +73,7 @@ const DECISIONS = [
   for (const withLesson of [false, true]) {
     for (let i = 0; i < 3; i++) {
       const { vault, store } = freshVault();
-      if (withLesson) for (const l of task.lessons) fetcher.teach(store, { topic: l.topic, threshold: 60, videos: [{ id: 'x', title: l.sources[0], score: 85, verdict: 'worth it', review: { techniques: l.techniques } }] });
+      if (withLesson) for (const l of task.lessons) fetcher.teach(store, { topic: l.topic, threshold: 60, videos: [{ id: 'x', title: l.sources[0], score: 85, verdict: 'worth it', review: { techniques: l.techniques.map((t) => ({ evidence: 'from the source', ...t })) } }] });
       const a = await ask(vault, `You are an AI agent working through Cortex (use the cortex tools; search Cortex memory before assuming anything). ${task.prompt}`);
       const code = ([...a.text.matchAll(/```(?:js|javascript)?\s*\n([\s\S]*?)```/g)].map((m) => m[1]).sort((x, y) => y.length - x.length)[0]) || a.text;
       const sc = task.score(code);
