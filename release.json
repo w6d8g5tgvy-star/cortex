@@ -1,7 +1,7 @@
 {
-    "version":  "1.2.8",
-    "branch":  "main",
-    "url":  "https://codeload.github.com/w6d8g5tgvy-star/cortex/tar.gz/refs/heads/main",
-    "notes":  "Fetcher: AI agents research YouTube (you or an agent asks; agent requests need your OK), a usefulness checker scores how each video helps agents do tasks, Cortex calculates whether it is worth it, and worth-it techniques become lessons agents get through briefs and recall. Needs yt-dlp for transcripts.",
-    "date":  "2026-11-20T03:22:15.102Z"
+  "version": "1.2.9",
+  "branch": "main",
+  "url": "https://codeload.github.com/w6d8g5tgvy-star/cortex/tar.gz/refs/heads/main",
+  "notes": "Phone pairing: the public link is now labelled 'works anywhere' instead of Wi-Fi.",
+  "date": "2026-11-20T19:57:14.669Z"
 }
