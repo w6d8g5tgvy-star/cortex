@@ -1079,20 +1079,26 @@ function drawLocalGraph(n) {
 // ---------- AGENTS HUB ----------
 const HUB = { sel: store.get('hubSel', ''), filter: store.get('hubFilter', { q: '', project: '', agent: '', status: 'active' }), tab: store.get('hubTab', 'launch'), data: null };
 const chatStatus = (x) => (x.archived ? 'archived' : ['working', 'needs-you'].includes(x.status) ? 'active' : 'idle');
+// Model + token helpers shared by the chat list, the chat detail and the usage panel.
+const fmtTok = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n || 0));
+const shortModel = (m) => String(m || '').replace(/^claude-/, '').replace(/-(\d+)-(\d+)$/, ' $1.$2').replace(/-(\d{8})$/, '');
+const chatTokens = (x) => (x.usage ? (x.usage.input || 0) + (x.usage.output || 0) : 0);
+const chatModel = (x) => x.model || (x.tool === 'codex' && x.launched ? 'Codex default' : '');
 function agentUsageHtml() {
+  // Every chat Cortex tracked (started from Cortex, or Claude Code sessions seen through the hooks), grouped by model.
   const since = Date.now() - 864e5;
-  const usageRows = Object.entries({ claude: 'Claude Code', codex: 'Codex' }).map(([tool, label]) => {
-    const runs = LIVE.sessions.filter((run) => run.tool === tool && run.launched && run.usage);
-    const totals = runs.reduce((sum, run) => ({
-      input: sum.input + run.usage.input, output: sum.output + run.usage.output
-    }), { input: 0, output: 0 });
-    const recent = runs.filter((run) => Date.parse(run.started) >= since)
-      .reduce((sum, run) => sum + run.usage.input + run.usage.output, 0);
-    return [label, runs.length ? recent.toLocaleString() + ' tokens in 24h. ' +
-      (totals.input + totals.output).toLocaleString() + ' recorded (' +
-      totals.input.toLocaleString() + ' input, ' + totals.output.toLocaleString() + ' output)' : 'No token reports yet'];
-  });
-  return usageRows.map(([tool, total]) => `<div class="row"><b>${tool}</b><span>${total}</span></div>`).join('');
+  const groups = {};
+  for (const x of LIVE.sessions) {
+    if (!x.usage) continue;
+    const key = chatModel(x) || `${x.agent} (model not reported)`;
+    const g = groups[key] || (groups[key] = { chats: 0, total: 0, day: 0, input: 0, output: 0, cached: 0, agent: x.agent });
+    const t = chatTokens(x);
+    g.chats++; g.total += t; g.input += x.usage.input || 0; g.output += x.usage.output || 0; g.cached += x.usage.cachedInput || 0;
+    if (Date.parse(x.updated || x.started) >= since) g.day += t;
+  }
+  const rows = Object.entries(groups).sort((a, b) => b[1].total - a[1].total);
+  if (!rows.length) return '<div class="small muted">No chat has reported tokens yet. Claude Code sessions report when they finish a turn; runs started here report as they go.</div>';
+  return `<div class="small muted" style="margin-bottom:6px">By model, for the chats listed below</div>` + rows.map(([m, g]) => `<div class="row" title="${esc(`${g.input.toLocaleString()} input (${g.cached.toLocaleString()} from cache) · ${g.output.toLocaleString()} output`)}"><b><span class="chip">${esc(shortModel(m))}</span></b><span>${fmtTok(g.day)} in 24h · ${fmtTok(g.total)} total · ${g.chats} chat${g.chats === 1 ? '' : 's'}</span></div>`).join('');
 }
 // Account-wide usage read from Claude Code / Codex logs on this computer (/api/usage), with quota meters.
 function accountUsageHtml(u) {
@@ -1115,6 +1121,7 @@ function accountUsageHtml(u) {
     return `<div style="margin-bottom:10px"><div class="row"><b>${esc(x.label)}</b><span>${fmt(w.h5.total)} tokens in 5h · ${fmt(w.d1.total)} today · ${fmt(w.d7.total)} this week</span></div>
       ${l ? `${l.plan ? `<div class="small muted">Plan: ${esc(l.plan)}${l.limitReached ? ' · <b style="color:var(--warn)">limit reached</b>' : ''}</div>` : ''}${meter(win(l.primary && l.primary.windowMinutes), l.primary)}${meter(win(l.secondary && l.secondary.windowMinutes), l.secondary)}`
         : key === 'claude' ? '<div class="small muted">Claude does not write its quota percentage to disk; limit hits from Cortex runs show below.</div>' : ''}
+      ${x.models && Object.keys(x.models).length ? `<div class="small" style="margin-top:4px">Today by model: ${Object.entries(x.models).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([mm, n]) => `<span class="chip" style="padding:0 6px">${esc(shortModel(mm))}</span> ${fmt(n)}`).join(' · ')}</div>` : ''}
       ${x.unreadable ? `<div class="small muted">${x.unreadable} compressed log(s) need Node 22.15+ to read.</div>` : ''}</div>`;
   };
   const notes = (u.notices || []).map((n) => `<div class="small" style="color:var(--warn)">⚠ ${esc(n.agent || n.tool || 'agent')}: ${esc(n.message)} (${esc(when(n.at))})</div>`).join('');
@@ -1149,7 +1156,7 @@ async function renderAgents() {
     <div class="panel" style="margin-bottom:12px"><h3>AI usage</h3>
       <p class="small muted">Everything Claude Code and Codex used on this computer (including work outside Cortex), with the Codex plan quota. Desktop and web apps don't keep local logs, so they aren't counted.</p>
       <div id="account-usage">${accountUsageHtml(HUB.usage)}</div>
-      <p class="small muted" style="margin-top:10px">Runs started from Cortex:</p>
+      <p class="small muted" style="margin-top:10px">Agent chats in Cortex (started here, or Claude Code sessions Cortex saw):</p>
       <div id="agent-usage">${agentUsageHtml()}</div>
     </div>
     <div class="hub-grid">
@@ -1276,7 +1283,7 @@ function renderHubList() {
   if (!el) return;
   const list = hubChats();
   if (!HUB.sel || !list.some((x) => x.id === HUB.sel)) HUB.sel = list[0] ? list[0].id : '';
-  el.innerHTML = list.map((x) => `<div class="chat-row ${x.id === HUB.sel ? 'on' : ''}" data-chat="${esc(x.id)}">${avatar(x.agent)}<div style="min-width:0"><div class="ttl">${x.pinned ? '📌 ' : ''}${esc(x.title || x.agent)}</div><div class="sub">${esc(x.agent)}${x.project ? ' · ' + esc(proj(x.project)?.title || x.project) : ''} · ${timeAgo(x.updated)}</div></div><span class="spill ${esc(x.status)}">${esc(STATUS_TEXT[x.status] || x.status)}</span></div>`).join('') || '<div class="empty">No chats match.</div>';
+  el.innerHTML = list.map((x) => `<div class="chat-row ${x.id === HUB.sel ? 'on' : ''}" data-chat="${esc(x.id)}">${avatar(x.agent)}<div style="min-width:0"><div class="ttl">${x.pinned ? '📌 ' : ''}${esc(x.title || x.agent)}</div><div class="sub">${esc(x.agent)}${chatModel(x) ? ` · <span class="chip" style="padding:0 6px;font-size:10.5px">${esc(shortModel(chatModel(x)))}</span>` : ''}${x.project ? ' · ' + esc(proj(x.project)?.title || x.project) : ''} · ${timeAgo(x.updated)}${chatTokens(x) ? ' · ' + fmtTok(chatTokens(x)) + ' tokens' : ''}</div></div><span class="spill ${esc(x.status)}">${esc(STATUS_TEXT[x.status] || x.status)}</span></div>`).join('') || '<div class="empty">No chats match.</div>';
   $$('[data-chat]', el).forEach((r) => (r.onclick = () => { HUB.sel = r.dataset.chat; store.set('hubSel', HUB.sel); renderHubList(); }));
   renderHubDetail();
 }
@@ -1288,7 +1295,8 @@ function renderHubDetail() {
   const running = (HUB.data && HUB.data.running.includes(x.id));
   const t = (iso) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   el.innerHTML = `
-    <div class="row" style="align-items:flex-start">${avatar(x.agent)}<div style="flex:1;min-width:0"><input class="ed-title" id="c-title" value="${esc(x.title || '')}" style="font-size:20px" placeholder="Name this chat"><div class="small muted">${esc(x.agent)}${x.workspace ? ' · ' + esc(x.workspace) : ''} · started ${timeAgo(x.started)}${x.model ? ' · ' + esc(x.model) : ''}</div></div><span class="spill ${esc(x.status)}">${esc(STATUS_TEXT[x.status] || x.status)}</span></div>
+    <div class="row" style="align-items:flex-start">${avatar(x.agent)}<div style="flex:1;min-width:0"><input class="ed-title" id="c-title" value="${esc(x.title || '')}" style="font-size:20px" placeholder="Name this chat"><div class="small muted">${esc(x.agent)}${x.workspace ? ' · ' + esc(x.workspace) : ''} · started ${timeAgo(x.started)}</div>
+      <div class="small" style="margin-top:4px">Model: <b>${esc(chatModel(x) || 'not reported')}</b>${x.usage ? ` · Tokens: <b>${fmtTok(chatTokens(x))}</b> (${(x.usage.input || 0).toLocaleString()} in${x.usage.cachedInput ? `, ${(x.usage.cachedInput).toLocaleString()} from cache` : ''} · ${(x.usage.output || 0).toLocaleString()} out)` : ''}${x.cost_usd ? ` · $${Number(x.cost_usd).toFixed(3)}` : ''}${x.turns ? ` · ${x.turns} turns` : ''}</div></div><span class="spill ${esc(x.status)}">${esc(STATUS_TEXT[x.status] || x.status)}</span></div>
     <div class="row" style="flex-wrap:wrap;gap:8px">
       <select class="input" id="c-proj" style="width:auto">${projectOptions(x.project, 'No project')}</select>
       <input class="input" id="c-tags" placeholder="tags" value="${esc((x.tags || []).join(', '))}" style="width:180px">

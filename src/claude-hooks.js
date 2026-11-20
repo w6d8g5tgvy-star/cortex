@@ -230,6 +230,28 @@ async function waitForApproval(vault, sid, input) {
   return null; // fall back to the normal dialog
 }
 
+// Read Claude Code's own session log (transcript_path from the hook input) for the model and token totals.
+// Same shape as launched runs: input counts cache reads and writes, cachedInput is the cache-read part.
+function sessionUsage(transcriptPath) {
+  try {
+    if (!transcriptPath) return null;
+    const st = fs.statSync(transcriptPath);
+    if (!st.isFile() || st.size > 40 * 1024 * 1024) return null;
+    const { entries } = require('./usage').parseClaude(fs.readFileSync(transcriptPath, 'utf8'));
+    if (!entries.length) return null;
+    const usage = { input: 0, output: 0, cachedInput: 0 };
+    const models = {};
+    let model = '';
+    for (const e of entries) {
+      usage.input += e.input + e.cacheRead + e.cacheWrite;
+      usage.output += e.output;
+      usage.cachedInput += e.cacheRead;
+      if (e.model && !e.model.startsWith('<')) { model = e.model; models[e.model] = (models[e.model] || 0) + e.input + e.cacheRead + e.cacheWrite + e.output; }
+    }
+    return { usage, ...(model ? { model, models } : {}) };
+  } catch { return null; }
+}
+
 async function runHook(input, vault) {
   const ev = input.hook_event_name;
   if (!ev || !input.session_id) return null;
@@ -282,6 +304,11 @@ async function runHook(input, vault) {
     sessions.upsert(vault, id, { ...base, ...(needs ? { status: 'needs-you' } : {}), step: String(input.message || 'Needs your attention') }, { kind: 'status', text: `⚠ ${input.message || 'Needs your attention'}` });
     return null;
   }
+  if ((ev === 'Stop' || ev === 'SessionEnd') && existing && !launched) {
+    // Model and tokens for sessions the user runs themselves (launched runs report these from their own output).
+    const su = sessionUsage(input.transcript_path);
+    if (su) sessions.upsert(vault, id, su);
+  }
   if (ev === 'Stop') {
     if (!existing) return null;
     const msgs = sessions.takeMessages(vault, id);
@@ -312,4 +339,4 @@ async function runHook(input, vault) {
   return null;
 }
 
-module.exports = { install, uninstall, repair, status, runHook, describeTool, hookCommand, EVENTS, SAVE_TOOLS, isCortexSave, mentionedProject };
+module.exports = { install, uninstall, repair, status, runHook, describeTool, hookCommand, EVENTS, SAVE_TOOLS, isCortexSave, mentionedProject, sessionUsage };

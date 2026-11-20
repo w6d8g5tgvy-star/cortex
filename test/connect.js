@@ -119,5 +119,22 @@ const ok = (m) => console.log('  ✓ ' + m);
   assert.throws(() => cleanModel('-p'));
   ok('model choice: explicit pick wins, project default applies to its own agent, unsafe names refused');
 
+  // model + tokens for Claude Code sessions are read from the session log (one usage per message id)
+  const { sessionUsage } = require(path.join(ROOT, 'src', 'claude-hooks.js'));
+  const tr = path.join(home, 'transcript.jsonl');
+  const line = (id, model, u) => JSON.stringify({ type: 'assistant', timestamp: '2026-11-20T01:00:00Z', requestId: 'r' + id, message: { id: 'm' + id, model, usage: u } });
+  fs.writeFileSync(tr, [
+    JSON.stringify({ type: 'user', message: { content: 'hi' } }),
+    line(1, 'claude-sonnet-5-5', { input_tokens: 10, cache_creation_input_tokens: 100, cache_read_input_tokens: 1000, output_tokens: 50 }),
+    line(1, 'claude-sonnet-5-5', { input_tokens: 10, cache_creation_input_tokens: 100, cache_read_input_tokens: 1000, output_tokens: 50 }), // same message, second content block
+    line(2, 'claude-haiku-5-5', { input_tokens: 5, cache_creation_input_tokens: 0, cache_read_input_tokens: 200, output_tokens: 20 }),
+  ].join('\n'));
+  const su = sessionUsage(tr);
+  assert.equal(su.model, 'claude-haiku-5-5', 'latest model');
+  assert.deepEqual(su.usage, { input: 1315, output: 70, cachedInput: 1200 });
+  assert.equal(su.models['claude-sonnet-5-5'], 1160);
+  assert.equal(sessionUsage(path.join(home, 'missing.jsonl')), null);
+  ok('Claude Code session model and tokens read from its log (duplicate blocks counted once)');
+
   console.log('\nAll connection checks passed.');
 })().catch((e) => { console.error('FAILED:', e); process.exit(1); });

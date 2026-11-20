@@ -124,7 +124,7 @@ function summarise(entries, now) {
       w.input += e.input; w.cacheRead += e.cacheRead; w.cacheWrite += e.cacheWrite; w.output += e.output; w.calls++;
       w.total += e.input + e.cacheRead + e.cacheWrite + e.output;
     }
-    if (e.model && e.t >= now - WINDOWS.d1) models[e.model] = (models[e.model] || 0) + e.input + e.cacheRead + e.cacheWrite + e.output;
+    if (e.model && !e.model.startsWith('<') && e.t >= now - WINDOWS.d1) models[e.model] = (models[e.model] || 0) + e.input + e.cacheRead + e.cacheWrite + e.output;
   }
   return { windows: out, lastActivity: last ? new Date(last).toISOString() : null, models };
 }
