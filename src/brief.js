@@ -27,7 +27,7 @@ function buildBrief(store, { project, task, assignment, runId }) {
     const open = store.list('task', { project: p.slug, open: true, limit: 25 });
     if (open.length) lines.push('### Open tasks', '', ...open.map((r) => `- [${r.meta.status}] ${r.title} (${r.id}, ${r.meta.priority || 'medium'})`), '');
     const notes = store.list('note', { project: p.slug, limit: 15 }).filter((r) => !r.meta.agent_journal);
-    if (notes.length) lines.push(`### Project memories: notes/${p.slug}/ (apply only to this project; read the ones you need with memory_get)`, '', ...notes.map((r) => `- ${r.title} (${r.id})${r.meta.pinned ? ' [pinned]' : ''}: ${clip(String(r.body).replace(/^#.*$/m, '').replace(/\s+/g, ' '), 110)}`), '');
+    if (notes.length) lines.push(`### Project memories: notes/${p.slug}/ (apply only to this project; read the ones you need with memory_get)`, '', ...notes.map((r) => `- ${r.title} (${r.id})${r.meta.pinned ? ' [pinned]' : ''}: ${(r.meta.fetcher_lesson && require('./fetcher').lessonPreview(r, 300)) || clip(String(r.body).replace(/^#.*$/m, '').replace(/\s+/g, ' '), 110)}`), '');
     const journal = store.list('note', { project: p.slug }).find((r) => r.meta.agent_journal);
     if (journal) {
       const recent = String(journal.body).split('\n').filter((l) => /^(- \d\d:\d\d|### |\*\*(Asked|Outcome))/.test(l)).slice(-8);
@@ -38,7 +38,7 @@ function buildBrief(store, { project, task, assignment, runId }) {
   const sys = store.list('note', { scope: 'system' }).filter((r) => !r.meta.agent_journal);
   const sysPinned = sys.filter((r) => r.meta.pinned === true).slice(0, 8);
   const sysRecent = sys.filter((r) => r.meta.pinned !== true).slice(0, 8);
-  if (sysPinned.length || sysRecent.length) lines.push('### System memories: notes/ (apply to every project)', '', ...[...sysPinned, ...sysRecent].map((r) => `- ${r.title} (${r.id})${r.meta.pinned ? ' [pinned]' : ''}: ${clip(String(r.body).replace(/^#.*$/m, '').replace(/\s+/g, ' '), r.meta.pinned ? 220 : 110)}`), '');
+  if (sysPinned.length || sysRecent.length) lines.push('### System memories: notes/ (apply to every project)', '', ...[...sysPinned, ...sysRecent].map((r) => `- ${r.title} (${r.id})${r.meta.pinned ? ' [pinned]' : ''}: ${(r.meta.fetcher_lesson && require('./fetcher').lessonPreview(r, 300)) || clip(String(r.body).replace(/^#.*$/m, '').replace(/\s+/g, ' '), r.meta.pinned ? 220 : 110)}`), '');
   if (t) {
     lines.push(`## Your task: ${t.title} (${t.id})`, '', `Status: ${t.meta.status} · priority ${t.meta.priority || 'medium'}${t.meta.due ? ` · due ${t.meta.due}` : ''}`, '');
     if (t.body && t.body.trim()) lines.push(clip(t.body, 4000), '');

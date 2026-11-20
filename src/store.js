@@ -61,6 +61,9 @@ class Store extends EventEmitter {
     try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
     for (const e of entries) {
       if (e.name.startsWith('.') || e.name === 'node_modules') continue;
+      // Fetcher's full reports live in <vault>/fetcher/ for reading in Obsidian; they are not memories
+      // (the lesson notes are), so agents never pay tokens for them.
+      if (dir === this.vault && e.name === 'fetcher' && e.isDirectory()) continue;
       const p = path.join(dir, e.name);
       if (e.isDirectory()) this.walk(p, out);
       else if (e.isFile() && e.name.toLowerCase().endsWith('.md')) out.push(p);

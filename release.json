@@ -1,7 +1,7 @@
 {
-    "version":  "1.2.7",
+    "version":  "1.2.8",
     "branch":  "main",
     "url":  "https://codeload.github.com/w6d8g5tgvy-star/cortex/tar.gz/refs/heads/main",
-    "notes":  "Live view of each AI app window (only while an agent is working in it; AI windows only; works when covered; fast capture helper). Lower token use: lean cortex_start, the Claude Code brief replaces cortex_start, short brief on resume, no recall on trivial prompts or repeated notes, compact JSON replies.",
-    "date":  "2026-11-20T02:55:00.343Z"
+    "notes":  "Fetcher: AI agents research YouTube (you or an agent asks; agent requests need your OK), a usefulness checker scores how each video helps agents do tasks, Cortex calculates whether it is worth it, and worth-it techniques become lessons agents get through briefs and recall. Needs yt-dlp for transcripts.",
+    "date":  "2026-11-20T03:22:15.102Z"
 }

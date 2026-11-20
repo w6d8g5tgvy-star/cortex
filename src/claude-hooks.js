@@ -215,7 +215,9 @@ function recall(vault, project, prompt, seen = {}) {
     .slice(0, 4);
   if (!hits.length) return { text: '', ids: {} };
   const ids = Object.fromEntries(hits.map((h) => [h.rec.id, String(h.rec.meta.updated || '')]));
-  return { ids, text: clip('[Cortex] Related memories (memory_get for the full note):\n' + hits.map((h) => `- ${h.rec.title} (${h.rec.id}${h.rec.meta.project ? '' : ', system'}): ${clip(h.snippet, 150)}`).join('\n'), 1400) };
+  // Lessons from Fetcher show their key takeaways (the advice itself), other notes a short snippet.
+  const preview = (h) => (h.rec.meta.fetcher_lesson && require('./fetcher').lessonPreview(h.rec)) || clip(h.snippet, 150);
+  return { ids, text: clip('[Cortex] Related memories (memory_get for the full note):\n' + hits.map((h) => `- ${h.rec.title} (${h.rec.id}${h.rec.meta.project ? '' : ', system'}): ${preview(h)}`).join('\n'), 1600) };
 }
 
 async function waitForApproval(vault, sid, input) {
@@ -271,6 +273,8 @@ function sessionUsage(transcriptPath) {
 async function runHook(input, vault) {
   const ev = input.hook_event_name;
   if (!ev || !input.session_id) return null;
+  // Internal one-shot runs (Fetcher's usefulness checker) must not get a brief or show up as chats.
+  if (process.env.CORTEX_QUIET === '1') return null;
   // Agents launched from Cortex carry CORTEX_RUN_ID so their hooks report into the same Live card.
   const launched = !!process.env.CORTEX_RUN_ID;
   const id = launched ? sessions.safeId(process.env.CORTEX_RUN_ID) : 'cc-' + sessions.safeId(input.session_id).slice(0, 40);

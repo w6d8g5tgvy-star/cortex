@@ -481,6 +481,28 @@ function buildTools(store) {
         .map((r) => ({ id: r.id, section: r.meta.section, title: r.title, url: r.meta.url, status: r.meta.status, notes: r.meta.notes, has_transcript: r.meta.has_transcript, added: r.created })),
     },
     {
+      name: 'fetcher_request',
+      description: 'Ask Cortex Fetcher to research a topic on YouTube: it finds videos, a usefulness checker scores how each would help agents do tasks, and worth-it techniques are saved as a "Lesson: <topic>" memory. Use it when you think there is a better or more efficient way to do something you are working on. The user approves agent requests first (unless they turned on auto-run). Check lessons later with memory_search.',
+      inputSchema: { type: 'object', properties: { topic: str('What to research, e.g. "faster test runs in large Node repos"'), why: str('What you were doing and what you hope to improve'), project: str('Project slug (optional)'), max_videos: { type: 'number', description: 'Videos to review with AI (default 5, max 12)' } }, required: ['topic'] },
+      run: (a, ctx) => {
+        const { Fetcher } = require('./fetcher');
+        const f = new Fetcher({ store, runner: null });
+        const job = f.create({ topic: a.topic, why: a.why, project: a.project ? store.resolveProject(a.project) : undefined, maxVideos: a.max_videos, from: ctx.agent, byAgent: true }, { start: false });
+        return { id: job.id, status: job.status, message: job.status === 'needs-approval' ? 'Sent to the user for approval in Cortex → Fetcher. Carry on with your task; the lesson will be in memory if it is approved and worth it.' : 'Queued: Cortex will research it and save a lesson if anything is worth it. Carry on with your task.' };
+      },
+    },
+    {
+      name: 'fetcher_status',
+      description: 'Status and results of Fetcher research (one id, or the latest requests): videos checked, worth-it count, top scores, and the lesson memory id.',
+      inputSchema: { type: 'object', properties: { id: str('Fetcher job id (optional)') } },
+      run: (a) => {
+        const { Fetcher } = require('./fetcher');
+        const f = new Fetcher({ store, runner: null });
+        if (a.id) { const j = f.get(a.id); if (!j) throw new Error('Unknown fetcher id'); return f.summary(j); }
+        return f.list().slice(0, 8).map((j) => f.summary(j));
+      },
+    },
+    {
       name: 'mind_add',
       description: 'Add something to the user\'s Mind: a video link (watch), an article link (read), or an article to write (write: give a title/topic and notes). The section is guessed from the link if omitted.',
       inputSchema: { type: 'object', properties: { url: str('Link to the video or article'), title: str('Title (required for write items)'), section: str('watch, read or write', { enum: ENUMS.mind.section }), notes: str('Why it matters / instructions'), project: str('Project slug'), fetch: { type: 'boolean', description: 'Fetch the transcript / article text right away' } } },

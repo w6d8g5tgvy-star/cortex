@@ -522,3 +522,7 @@ textarea.input { resize: vertical; line-height: 1.55; }
 .aiw-foot { padding: 8px 10px; display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; overflow: hidden; }
 .aiw-foot .small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 @media (max-width: 600px) { .aiw-grid { grid-template-columns: 1fr; } }
+/* Fetcher */
+.fx-vid { border-top: 1px solid var(--line); padding: 10px 0; }
+.fx-score { display: inline-block; width: 70px; height: 6px; border-radius: 4px; background: rgba(255,255,255,.08); overflow: hidden; vertical-align: middle; }
+.fx-score > span { display: block; height: 6px; background: var(--aurora, #4f9cf9); }

@@ -175,7 +175,27 @@ function pickTrack(tracks, langs = ['en']) {
     || by((t) => langs.some((l) => t.lang.startsWith(l))) || by((t) => !t.auto) || tracks[0];
 }
 
-const which = (bin) => new Promise((res) => execFile(process.platform === 'win32' ? 'where' : 'which', [bin], (e, out) => res(e ? null : String(out).split(/\r?\n/)[0].trim() || null)));
+// Windows: programs installed after Cortex started (e.g. `winget install yt-dlp`) are only on the PATH saved in
+// the registry, not on this process's PATH. Re-read it (cached 30 s) so tools and their helpers (yt-dlp → deno) are found.
+let pathCache = { at: 0, value: '' };
+function freshPath() {
+  if (process.platform !== 'win32') return process.env.PATH || '';
+  if (Date.now() - pathCache.at < 30000) return pathCache.value;
+  const read = (key) => {
+    try {
+      const out = require('child_process').execFileSync('reg', ['query', key, '/v', 'Path'], { encoding: 'utf8', windowsHide: true, timeout: 5000 });
+      const m = out.match(/Path\s+REG_(?:EXPAND_)?SZ\s+(.*)/i);
+      return m ? m[1].trim().replace(/%([^%]+)%/g, (x, v) => process.env[v] || x) : '';
+    } catch { return ''; }
+  };
+  const parts = [process.env.PATH || process.env.Path || '', read('HKCU\\Environment'), read('HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment')]
+    .join(';').split(';').map((s) => s.trim()).filter(Boolean);
+  pathCache = { at: Date.now(), value: [...new Set(parts)].join(';') };
+  return pathCache.value;
+}
+const toolEnv = () => (process.platform === 'win32' ? { ...process.env, PATH: freshPath(), Path: freshPath() } : process.env);
+
+const which = (bin) => new Promise((res) => execFile(process.platform === 'win32' ? 'where' : 'which', [bin], { env: toolEnv(), windowsHide: true }, (e, out) => res(e ? null : String(out).split(/\r?\n/)[0].trim() || null)));
 
 async function viaYtDlp(url) {
   const bin = process.env.CORTEX_YTDLP || await which('yt-dlp');
@@ -183,7 +203,7 @@ async function viaYtDlp(url) {
   await assertPublicUrl(url);
   const args = ['-J', '--skip-download', '--no-playlist', '--no-warnings', url];
   const nodeWrapper = bin === process.env.CORTEX_YTDLP && /\.js$/i.test(bin);
-  const json = await new Promise((resolve, reject) => execFile(nodeWrapper ? process.execPath : bin, nodeWrapper ? [bin, ...args] : args, { timeout: 60000, maxBuffer: 64 * 1024 * 1024, windowsHide: true },
+  const json = await new Promise((resolve, reject) => execFile(nodeWrapper ? process.execPath : bin, nodeWrapper ? [bin, ...args] : args, { timeout: 60000, maxBuffer: 64 * 1024 * 1024, windowsHide: true, env: toolEnv() },
     (e, out, err) => (e ? reject(new Error(`yt-dlp: ${String(err || e.message).trim().split('\n').pop()}`)) : resolve(out))));
   const info = JSON.parse(json);
   const tracks = [];
@@ -285,4 +305,4 @@ function articleMarkdown(a) {
   ].join('\n');
 }
 
-module.exports = { fetchVideo, fetchArticle, videoMarkdown, articleMarkdown, youtubeId, parseCaptions, formatTranscript, htmlToText, assertPublicUrl, isPrivateIp };
+module.exports = { fetchVideo, fetchArticle, videoMarkdown, articleMarkdown, youtubeId, parseCaptions, formatTranscript, htmlToText, assertPublicUrl, isPrivateIp, safeFetch, extractJsonAfter, which, toolEnv };

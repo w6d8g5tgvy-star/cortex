@@ -13,6 +13,7 @@ const sessions = require('./sessions');
 const settingsMod = require('./settings');
 const screen = require('./screen');
 const winmod = require('./windows');
+const { Fetcher } = require('./fetcher');
 const updater = require('./updater');
 const claudeHooks = require('./claude-hooks');
 const agents = require('./agents');
@@ -111,6 +112,10 @@ function startServer({ store, port, host, token: cliToken }) {
   setTimeout(semIndex, 5000).unref();
   store.on('change', () => { clearTimeout(semTimer); semTimer = setTimeout(semIndex, 15000); semTimer.unref(); });
   const runner = new AgentRunner(store);
+  // Fetcher: this server is the one place research jobs run (agents' MCP processes only queue them).
+  const fetcher = new Fetcher({ store, runner, broadcast: (ev) => broadcast(ev) });
+  setTimeout(() => fetcher.pickUp(), 4000).unref();
+  setInterval(() => fetcher.pickUp(), 5000).unref();
   // AI window list (refreshed at most every 2 s) and per-window captures shared by all viewers (1.2 s).
   const winState = { list: [], listAt: 0, listing: null, shots: new Map() };
   const aiWindows = async () => {
@@ -411,6 +416,50 @@ function startServer({ store, port, host, token: cliToken }) {
       if (!f || !fs.existsSync(f.file)) return send(res, 404, { error: 'No snapshot' });
       res.writeHead(200, { 'Content-Type': f.mime, 'Cache-Control': 'no-store' });
       return fs.createReadStream(f.file).pipe(res);
+    }
+    // ---- Fetcher: YouTube research + usefulness checker ----
+    if (p === '/api/fetcher' && m === 'GET') {
+      const ytdlp = !!(process.env.CORTEX_YTDLP || await require('./media').which('yt-dlp'));
+      return send(res, 200, { jobs: fetcher.list().slice(0, 40).map((j) => fetcher.summary(j)), settings: fetcher.conf(), ytdlp });
+    }
+    if (p === '/api/fetcher/job' && m === 'GET') {
+      const j = fetcher.get(u.searchParams.get('id'));
+      return j ? send(res, 200, j) : send(res, 404, { error: 'Not found' });
+    }
+    if (p === '/api/fetcher' && m === 'POST') {
+      const b = await json();
+      try {
+        const project = b.project ? store.resolveProject(b.project) : undefined;
+        return send(res, 201, fetcher.summary(fetcher.create({ topic: b.topic, why: b.why, project, maxVideos: b.maxVideos, model: b.model, queries: b.queries, from: agent })));
+      } catch (e) { return send(res, 400, { error: e.message }); }
+    }
+    if (p === '/api/fetcher/approve' && m === 'POST') {
+      const b = await json();
+      try { return send(res, 200, fetcher.summary(b.reject ? fetcher.reject(b.id) : fetcher.approve(b.id))); } catch (e) { return send(res, 404, { error: e.message }); }
+    }
+    if (p === '/api/fetcher/teach' && m === 'POST') {
+      const b = await json();
+      try { return send(res, 200, fetcher.summary(fetcher.teachVideo(b.id, b.videoId))); } catch (e) { return send(res, 400, { error: e.message }); }
+    }
+    if (p === '/api/fetcher/rescore' && m === 'POST') {
+      const b = await json();
+      try { return send(res, 200, fetcher.summary(fetcher.rescore(b.id))); } catch (e) { return send(res, 400, { error: e.message }); }
+    }
+    if (p === '/api/fetcher' && m === 'DELETE') { fetcher.remove(u.searchParams.get('id')); return send(res, 200, { ok: true }); }
+    if (p === '/api/fetcher/settings' && m === 'POST') {
+      if (!localOnly()) return;
+      const b = await json();
+      const cur = fetcher.conf();
+      const next = {
+        model: b.model !== undefined ? (String(b.model).trim() || 'sonnet') : cur.model,
+        maxVideos: b.maxVideos !== undefined ? Math.max(1, Math.min(12, Number(b.maxVideos) || 5)) : cur.maxVideos,
+        team: b.team !== undefined ? Math.max(1, Math.min(4, Number(b.team) || 3)) : cur.team,
+        threshold: b.threshold !== undefined ? Math.max(30, Math.min(95, Number(b.threshold) || 60)) : cur.threshold,
+        autoRunAgentRequests: b.autoRunAgentRequests !== undefined ? !!b.autoRunAgentRequests : cur.autoRunAgentRequests,
+      };
+      require('./agents').cleanModel(next.model);
+      settingsMod.update(vault, { fetcher: next });
+      return send(res, 200, next);
     }
     // ---- live view of each AI app's window (Windows) ----
     if (p === '/api/windows' && m === 'GET') {

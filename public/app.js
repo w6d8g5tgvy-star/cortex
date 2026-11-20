@@ -34,7 +34,7 @@ const AGENT_MODELS = { claude: ['opus', 'sonnet', 'haiku'], codex: [] };
 const PALETTE = ['#8b7cf6', '#4f9cf9', '#3fc5d6', '#3ecf8e', '#f5b84b', '#f2676b', '#ec6fcf', '#a3e635'];
 const NAV = [
   ['home', 'Home', 'i-home', 'Workspace'], ['projects', 'Projects', 'i-projects'], ['board', 'Board', 'i-board'],
-  ['memory', 'Memory vault', 'i-memory', 'Knowledge'], ['graph', 'Neural map', 'i-graph'], ['mind', 'Mind', 'i-mind'], ['skills', 'Skills', 'i-skills'],
+  ['memory', 'Memory vault', 'i-memory', 'Knowledge'], ['graph', 'Neural map', 'i-graph'], ['mind', 'Mind', 'i-mind'], ['fetcher', 'Fetcher', 'i-fetch'], ['skills', 'Skills', 'i-skills'],
   ['live', 'Live', 'i-live', 'Agents'], ['agents', 'Agents', 'i-agents'], ['settings', 'Settings', 'i-settings'],
 ];
 
@@ -180,7 +180,7 @@ function render() {
   if (v !== 'graph') stopGraph();
   if (v !== 'live') { stopScreen(); stopAiWindows(); }
   if (render.last !== v) { main.classList.remove('view-in'); void main.offsetWidth; main.classList.add('view-in'); render.last = v; }
-  ({ mind: renderMind, skills: renderSkills, live: renderLive, home: renderHome, projects: renderProjects, board: renderBoard, memory: renderMemory, graph: renderGraph, agents: renderAgents, settings: renderSettings }[v])();
+  ({ mind: renderMind, fetcher: renderFetcher, skills: renderSkills, live: renderLive, home: renderHome, projects: renderProjects, board: renderBoard, memory: renderMemory, graph: renderGraph, agents: renderAgents, settings: renderSettings }[v])();
 }
 
 // ---------- data ----------
@@ -206,6 +206,7 @@ function connectEvents() {
     if (ev.type === 'live') return updateLive();
     if (ev.type === 'commands') { if (S.route[0] === 'agents') renderAgents(); return; }
     if (ev.type === 'tunnel') { if (S.route[0] === 'settings') renderSettings(); return; }
+    if (ev.type === 'fetcher') { if (S.route[0] === 'fetcher') { clearTimeout(FX.t); FX.t = setTimeout(() => renderFetcher(true), 400); } return; }
     if (ev.type === 'update') { if (S.route[0] === 'settings') renderSettings(); return scheduleRefresh(); }
     scheduleRefresh();
   };
@@ -1342,6 +1343,90 @@ function bindConnect(cfg) {
 // ---------- MIND ----------
 const MIND_SECTIONS = [['watch', 'Watch', 'i-play', 'Videos for the AI to watch (via transcript)'], ['read', 'Read', 'i-book', 'Articles and pages to read'], ['write', 'Write', 'i-pen', 'Articles you want written']];
 function ytThumb(url) { try { const u = new URL(url); const id = u.hostname.includes('youtu.be') ? u.pathname.slice(1, 12) : u.searchParams.get('v') || (u.pathname.match(/\/(shorts|embed|live)\/([\w-]{11})/) || [])[2]; return id ? `https://i.ytimg.com/vi/${id}/hqdefault.jpg` : ''; } catch { return ''; } }
+// ---------- FETCHER: agents research YouTube, a usefulness checker scores it, worth-it lessons teach agents ----------
+const FX = { data: null, open: store.get('fxOpen', ''), t: null };
+const VERDICT_CLS = { 'worth it': 'ok', maybe: 'warn', 'not worth it': '' };
+async function renderFetcher(soft) {
+  try { FX.data = await api('/api/fetcher'); } catch (e) { return fail(e); }
+  if (S.route[0] !== 'fetcher') return;
+  const d = FX.data;
+  const keepForm = soft && $('#fx-form');
+  const formVals = keepForm ? { topic: $('#fx-topic').value, why: $('#fx-why').value } : null;
+  const c = d.settings;
+  main.innerHTML = `
+    <div class="page-head"><div><div class="eyebrow">Learning</div><h1><span class="grad">Fetcher</span></h1>
+      <p>Send AI agents through YouTube to learn how to do something better. A usefulness checker scores how each video would help agents do tasks, Cortex calculates whether it's worth it, and worth-it techniques are taught to every agent as a lesson in memory.</p></div></div>
+    ${d.ytdlp ? '' : `<div class="panel" style="border-color:rgba(255,195,92,.45);margin-bottom:14px"><b style="color:var(--warn)">Transcripts need yt-dlp.</b> <span class="small">Without it YouTube only gives Cortex titles and descriptions, so most videos fail the pre-check. Install it once (PowerShell): <code>winget install yt-dlp.yt-dlp</code>, then restart Cortex.</span></div>`}
+    <div class="panel" style="margin-bottom:16px">
+      <form id="fx-form" class="modal-body" style="padding:0">
+        <div class="field"><label>What should the agents research?</label><input class="input" id="fx-topic" required placeholder="e.g. writing better prompts for coding agents" value="${esc(formVals ? formVals.topic : '')}"></div>
+        <div class="field"><label>Why (optional): what you want to get better at</label><input class="input" id="fx-why" placeholder="e.g. agents waste tokens re-reading files" value="${esc(formVals ? formVals.why : '')}"></div>
+        <div class="grid2">
+          <div class="field"><label>Project (lesson is saved there; empty = every project)</label><select class="input" id="fx-proj">${projectOptions(store.get('fxProj', ''), 'Every project (system lesson)')}</select></div>
+          <div class="field"><label>Videos to review with AI</label><input class="input" id="fx-n" type="number" min="1" max="12" value="${esc(c.maxVideos)}"></div>
+          <div class="field"><label>Usefulness checker model</label><input class="input" id="fx-model" list="fx-models" value="${esc(c.model)}"><datalist id="fx-models">${AGENT_MODELS.claude.map((mm) => `<option value="${mm}">`).join('')}</datalist></div>
+        </div>
+        <div class="row" style="margin-top:6px"><span class="small muted">Searches ${'≈'}4 angles of the topic, reads the best-ranked videos, drops weak ones for free, and only then spends AI on the shortlist.</span><span class="spacer"></span><button class="btn primary" type="submit">${icon('i-fetch')} Fetch</button></div>
+      </form>
+      ${S.local ? `<details style="margin-top:10px"><summary class="small" style="cursor:pointer">Fetcher settings</summary>
+        <div class="grid2" style="margin-top:8px">
+          <div class="field"><label>"Worth it" from score</label><input class="input" id="fx-th" type="number" min="30" max="95" value="${esc(c.threshold)}"></div>
+          <div class="field"><label>Reviewers working at once</label><input class="input" id="fx-team" type="number" min="1" max="4" value="${esc(c.team)}"></div>
+        </div>
+        ${toggleRow('fx-auto', c.autoRunAgentRequests, 'Run agents\' research requests without asking me', 'Off: when an agent asks Fetcher to research something, it waits here for your OK, so agents can\'t spend usage on their own.')}
+        <div class="row"><span class="spacer"></span><button class="btn sm" id="fx-save">Save settings</button></div></details>` : ''}
+    </div>
+    <div id="fx-jobs">${d.jobs.length ? d.jobs.map(fxJobHtml).join('') : '<div class="empty">No research yet. Ask for a topic above, or let an agent ask with the fetcher_request tool.</div>'}</div>`;
+  $('#fx-form').onsubmit = async (e) => {
+    e.preventDefault();
+    store.set('fxProj', $('#fx-proj').value);
+    try { const r = await api('/api/fetcher', { method: 'POST', body: { topic: $('#fx-topic').value, why: $('#fx-why').value, project: $('#fx-proj').value || undefined, maxVideos: Number($('#fx-n').value), model: $('#fx-model').value.trim() } }); FX.open = r.id; store.set('fxOpen', r.id); toast('Fetcher started: follow it below'); $('#fx-topic').value = ''; $('#fx-why').value = ''; renderFetcher(); } catch (er) { fail(er); }
+  };
+  const sv = $('#fx-save');
+  if (sv) sv.onclick = async () => { try { await api('/api/fetcher/settings', { method: 'POST', body: { threshold: Number($('#fx-th').value), team: Number($('#fx-team').value), model: $('#fx-model').value.trim(), maxVideos: Number($('#fx-n').value), autoRunAgentRequests: !!($('[data-setting="fx-auto"]') || {}).checked } }); toast('Fetcher settings saved'); renderFetcher(); } catch (er) { fail(er); } };
+  $$('[data-fxopen]').forEach((b) => (b.onclick = () => { FX.open = FX.open === b.dataset.fxopen ? '' : b.dataset.fxopen; store.set('fxOpen', FX.open); renderFetcher(true); }));
+  $$('[data-fxok]').forEach((b) => (b.onclick = async () => { await api('/api/fetcher/approve', { method: 'POST', body: { id: b.dataset.fxok, reject: b.dataset.no === '1' } }).catch(fail); renderFetcher(); }));
+  $$('[data-fxrescore]').forEach((b) => (b.onclick = async () => { await api('/api/fetcher/rescore', { method: 'POST', body: { id: b.dataset.fxrescore } }).then((r) => toast(r.lesson ? 'Re-scored: lesson updated' : 'Re-scored: still nothing worth it')).catch(fail); renderFetcher(); }));
+  $$('[data-fxdel]').forEach((b) => (b.onclick = async () => { if (!confirm('Delete this research run? (The lesson memory stays.)')) return; await api('/api/fetcher?id=' + encodeURIComponent(b.dataset.fxdel), { method: 'DELETE' }).catch(fail); renderFetcher(); }));
+  $$('[data-fxteach]').forEach((b) => (b.onclick = async () => { await api('/api/fetcher/teach', { method: 'POST', body: { id: b.dataset.fxteach, videoId: b.dataset.vid } }).then(() => toast('Added to the lesson')).catch(fail); renderFetcher(true); }));
+  $$('[data-open]', main).forEach((b) => (b.onclick = () => openItem(b.dataset.open)));
+  if (FX.open && d.jobs.some((j) => j.id === FX.open)) fxLoadDetail(FX.open);
+}
+function fxJobHtml(j) {
+  const running = ['queued', 'searching', 'checking', 'reviewing', 'teaching'].includes(j.status);
+  const chip = j.status === 'done' ? 'ok' : j.status === 'needs-approval' ? 'warn' : j.status === 'error' ? 'bad' : '';
+  return `<div class="panel fx-job" style="margin-bottom:12px">
+    <div class="row" style="gap:10px;flex-wrap:wrap">${running ? '<span class="live-dot"></span>' : ''}<b style="font-size:15px">${esc(j.topic)}</b><span class="chip ${chip}">${esc(j.status === 'needs-approval' ? 'needs your OK' : j.status)}</span>
+      <span class="small muted">${esc(j.from)} · ${timeAgo(j.created)}${j.project ? ' · ' + esc(proj(j.project)?.title || j.project) : ''}</span><span class="spacer"></span>
+      ${j.status === 'needs-approval' ? `<button class="btn sm" data-fxok="${esc(j.id)}" data-no="1">Decline</button><button class="btn sm primary" data-fxok="${esc(j.id)}">Approve &amp; run</button>` : ''}
+      ${j.status === 'done' && j.threshold !== (FX.data && FX.data.settings.threshold) ? `<button class="btn sm ghost" data-fxrescore="${esc(j.id)}" title="Apply the current worth-it score (${FX.data.settings.threshold}) without new AI calls">Re-score</button>` : ''}
+      <button class="btn sm ghost" data-fxopen="${esc(j.id)}">${FX.open === j.id ? 'Hide' : 'Details'}</button><button class="btn sm ghost danger" data-fxdel="${esc(j.id)}" title="Delete run">${icon('i-trash')}</button></div>
+    <div class="small" style="margin-top:6px">${esc(j.step || '')}</div>
+    ${j.status === 'done' ? `<div class="row small" style="margin-top:6px;gap:10px;flex-wrap:wrap"><span>${j.videos} checked · <b>${j.worth_it}</b> worth it</span>
+      ${j.lesson ? `<a href="#" data-open="${esc(j.lesson)}">Open lesson</a> <span class="chip ${j.learning && j.learning.found ? 'ok' : 'warn'}">${j.learning && j.learning.found ? `✓ agents find it (#${j.learning.rank} for "${esc(clipS(j.topic, 40))}")` : '⚠ not in the top 3 searches'}</span>` : ''}</div>` : ''}
+    <div id="fx-detail-${esc(j.id)}"></div></div>`;
+}
+const clipS = (s, n) => (String(s).length > n ? String(s).slice(0, n - 1) + '…' : String(s));
+async function fxLoadDetail(id) {
+  const el = $('#fx-detail-' + CSS.escape(id));
+  if (!el) return;
+  let j;
+  try { j = await api('/api/fetcher/job?id=' + encodeURIComponent(id)); } catch { return; }
+  const vids = [...j.videos].sort((a, b) => (b.score ?? -1) - (a.score ?? -1) || b.pre.score - a.pre.score);
+  el.innerHTML = `<div style="margin-top:10px">
+    <div class="small muted" style="margin-bottom:6px">Searches: ${j.queries.map((q) => `"${esc(q)}"`).join(', ')} → ${j.found || 0} found · reviewer ${esc(j.model || '')} · ${(j.usage.input + j.usage.output).toLocaleString()} tokens${j.usage.cost ? ` · $${j.usage.cost.toFixed(3)}` : ''}${j.report ? ` · report: <code>${esc(j.report)}</code>` : ''}</div>
+    <div class="small muted" style="margin-bottom:8px">Worth-it score (calculated by Cortex) = 35% impact + 25% how often it applies + 15% confidence + 15% low effort + 10% low risk. ≥ ${j.threshold} is "worth it".</div>
+    ${vids.map((v) => `<div class="fx-vid">
+      <div class="row" style="gap:8px;flex-wrap:wrap"><a href="https://www.youtube.com/watch?v=${esc(v.id)}" target="_blank" rel="noopener"><b>${esc(v.title)}</b></a><span class="small muted">${esc(v.channel || '')}${v.duration ? ' · ' + Math.round(v.duration / 60) + ' min' : ''}</span><span class="spacer"></span>
+        <span class="small muted" title="Free local pre-check: ${esc(v.pre.reason)}">pre ${v.pre.score}</span>
+        ${v.score != null ? `<span class="fx-score"><span style="width:${v.score}%"></span></span><b>${v.score}</b><span class="chip ${VERDICT_CLS[v.verdict] || ''}">${esc(v.verdict)}</span>` : `<span class="chip">${esc(v.error ? 'review failed' : v.skipped || '—')}</span>`}</div>
+      ${v.review ? `<div class="small" style="margin-top:4px">${esc(v.review.summary)}</div>
+        <div class="small muted" style="margin-top:2px">impact ${v.review.impact} · applies ${v.review.applicability} · confidence ${v.review.confidence} · effort ${v.review.effort} · risk ${v.review.risk} — ${esc(v.review.reasoning)}</div>
+        ${v.review.techniques.length ? `<ul class="small" style="margin:6px 0 0;padding-left:18px">${v.review.techniques.map((t) => `<li><b>${esc(t.name)}</b>: when ${esc(t.when)} → ${esc(t.do)}${t.evidence ? ` <span class="muted">(${esc(t.evidence)})</span>` : ''}</li>`).join('')}</ul>` : ''}
+        ${v.verdict !== 'worth it' && !v.taught && v.review.techniques.length ? `<button class="btn sm ghost" style="margin-top:4px" data-fxteach="${esc(j.id)}" data-vid="${esc(v.id)}">Teach this anyway</button>` : v.taught ? '<span class="chip ok" style="margin-top:4px">taught by you</span>' : ''}` : v.error ? `<div class="small" style="color:var(--bad)">${esc(v.error)}</div>` : `<div class="small muted">${esc(v.pre.reason)}${v.transcriptNote ? ' · ' + esc(v.transcriptNote) : ''}</div>`}
+    </div>`).join('')}</div>`;
+  $$('[data-fxteach]', el).forEach((b) => (b.onclick = async () => { await api('/api/fetcher/teach', { method: 'POST', body: { id: b.dataset.fxteach, videoId: b.dataset.vid } }).then(() => toast('Added to the lesson')).catch(fail); renderFetcher(true); }));
+}
 function renderMind() {
   const items = S.mind || [];
   main.innerHTML = `
