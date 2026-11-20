@@ -47,6 +47,12 @@ function buildBrief(store, { project, task, assignment, runId }) {
     lines.push(`## Your task: ${t.title} (${t.id})`, '', `Status: ${t.meta.status} · priority ${t.meta.priority || 'medium'}${t.meta.due ? ` · due ${t.meta.due}` : ''}`, '');
     if (t.body && t.body.trim()) lines.push(clip(t.body, 4000), '');
   }
+  try {
+    const want = [t && t.title, t && t.body, assignment].filter(Boolean).join('\n');
+    const ls = require('./lesson-select');
+    const picks = want.trim() ? ls.select(store, { project: slug, text: want, max: 5, minScore: 2 }) : [];
+    if (picks.length) lines.push('### Lessons that fit this task (vetted by Fetcher)', '', ...ls.briefLines(picks), '');
+  } catch { /* optional */ }
   if (assignment && String(assignment).trim()) lines.push(t ? '## Extra instructions from the user' : '## Your assignment', '', String(assignment).trim(), '');
   lines.push('## How to work with Cortex',
     '- This brief already contains what `cortex_start` and `project_brief` return: do not call them again. Read a listed memory in full with `memory_get` only when you need it.',

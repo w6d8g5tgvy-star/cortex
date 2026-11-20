@@ -213,11 +213,16 @@ function recall(vault, project, prompt, seen = {}) {
   const hits = store.search(prompt, { kind: 'note', limit: 6, minMatch: 1, ...f })
     .filter((h) => !h.rec.meta.agent_journal && h.score >= 6 && seen[h.rec.id] !== String(h.rec.meta.updated || ''))
     .slice(0, 4);
-  if (!hits.length) return { text: '', ids: {} };
+  let picks = [];
+  try { picks = require('./lesson-select').select(store, { project, text: prompt, max: 3, minScore: 2 }).filter((p) => !seen['lesson:' + p.lesson + ':' + p.name]); } catch { picks = []; }
+  if (!hits.length && !picks.length) return { text: '', ids: {} };
   const ids = Object.fromEntries(hits.map((h) => [h.rec.id, String(h.rec.meta.updated || '')]));
+  for (const p of picks) ids['lesson:' + p.lesson + ':' + p.name] = '1';
+  const tech = picks.length ? '\n[Cortex] Vetted techniques that fit (say which one you use):\n' + picks.map((p) => `- ${p.line} (${p.lesson})`).join('\n') : '';
   // Lessons from Fetcher show their key takeaways (the advice itself), other notes a short snippet.
   const preview = (h) => (h.rec.meta.fetcher_lesson && require('./fetcher').lessonPreview(h.rec)) || clip(h.snippet, 150);
-  return { ids, text: clip('[Cortex] Related memories (memory_get for the full note):\n' + hits.map((h) => `- ${h.rec.title} (${h.rec.id}${h.rec.meta.project ? '' : ', system'}): ${preview(h)}`).join('\n'), 1600) };
+  const mem = hits.length ? '[Cortex] Related memories (memory_get for the full note):\n' + hits.map((h) => `- ${h.rec.title} (${h.rec.id}${h.rec.meta.project ? '' : ', system'}): ${preview(h)}`).join('\n') : '';
+  return { ids, text: clip((mem + tech).trim(), 2000) };
 }
 
 async function waitForApproval(vault, sid, input) {
@@ -363,4 +368,4 @@ async function runHook(input, vault) {
   return null;
 }
 
-module.exports = { install, uninstall, repair, status, runHook, describeTool, hookCommand, EVENTS, SAVE_TOOLS, isCortexSave, mentionedProject, sessionUsage };
+module.exports = { install, uninstall, repair, status, runHook, describeTool, hookCommand, EVENTS, SAVE_TOOLS, isCortexSave, mentionedProject, sessionUsage, recall };

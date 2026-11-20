@@ -208,19 +208,20 @@ const lessonTitle = (topic) => clip(`Lesson: ${String(topic).trim()}`, 90);
 
 /** One line per technique, for previews (recall, briefs, excerpts): the advice itself, not the boilerplate. */
 function takeaways(techs, max = 6) {
-  return techs.slice(0, max).map((t) => `${t.name}: ${clip(t.when ? `when ${String(t.when).replace(/^\s*when\s+/i, '')} → ` : '', 110)}${clip(t.do, 150)}`);
+  return techs.slice(0, max).map((t) => `${t.name}: ${clip(t.when ? `when ${String(t.when).replace(/^\s*when\s+/i, '')} → ` : '', 110)}${clip(t.do, 150)}${require('./lesson-guard').marker(t)}`);
 }
 
-function lessonBody(topic, techs, stats) {
+function lessonBody(topic, techs, stats, quarantined = []) {
   const lines = [
     `# ${lessonTitle(topic)}`, '',
     'Key takeaways (apply the ones that match your task):',
     ...takeaways(techs, 10).map((t) => `- ${t}`), '',
     `> Learned by Cortex Fetcher from YouTube (${stats.videos} video${stats.videos === 1 ? '' : 's'} passed the usefulness checker; last run ${stats.date}). Each technique scored "worth it" (≥ ${stats.threshold}/100). Say which technique you used. Ask the user before installing any tool or service a technique names. Reports with every video checked: vault folder fetcher/.`, '',
+    ...(quarantined.length ? [`> ${quarantined.length} technique${quarantined.length === 1 ? ' was' : 's were'} quarantined by the safety check and are NOT shown to agents (kept for review in this note's fetcher_quarantine field).`, ''] : []),
     '## Techniques in detail', '',
   ];
   for (const t of techs) {
-    lines.push(`### ${t.name}`, `- **When:** ${t.when || '—'}`, `- **Do:** ${t.do || '—'}`, `- **Why:** ${t.why || '—'}`,
+    lines.push(`### ${t.name}`, `- **When:** ${t.when || '—'}`, `- **Do:** ${t.do || '—'}`, `- **Why:** ${t.why || '—'}`, `- **Trust:** ${t.trust || 'unknown'}${t.safety === 'ask' ? ` · ⚠ ask the user before doing this (${(t.safety_reasons || []).join(', ')})` : ''}`,
       `- **Sources:** ${t.sources.map((s) => `[${clip(s.title, 70)}](${s.url}) (score ${s.score}${s.evidence ? `, ${clip(s.evidence, 60)}` : ''})`).join('; ')}`, '');
   }
   return lines.join('\n');
@@ -234,6 +235,7 @@ function teach(store, job) {
   const existing = store.list('note', job.project ? { project: job.project } : { scope: 'system' }).find((r) => r.title === title);
   let techs = [];
   try { techs = existing && existing.meta.fetcher_lesson ? JSON.parse(existing.meta.fetcher_lesson) : []; } catch { techs = []; }
+  try { if (existing && existing.meta.fetcher_quarantine) techs = techs.concat(JSON.parse(existing.meta.fetcher_quarantine)); } catch { /* ignore */ }
   const byName = new Map(techs.map((t) => [normName(t.name), t]));
   for (const v of good) {
     for (const t of v.review.techniques) {
@@ -245,11 +247,13 @@ function teach(store, job) {
     }
   }
   techs = [...byName.values()].sort((a, b) => b.sources.length - a.sources.length || Math.max(...b.sources.map((s) => s.score)) - Math.max(...a.sources.map((s) => s.score)));
+  const safe = require('./lesson-guard').guard(techs); // provenance + injection/danger scan; quarantined ones never reach agents
+  techs = safe.active;
   const videos = new Set(techs.flatMap((t) => t.sources.map((s) => s.url))).size;
-  const body = lessonBody(job.topic, techs, { videos, date: new Date().toISOString().slice(0, 10), threshold: job.threshold });
-  const meta = { type: 'reference', tags: ['lesson', 'fetcher'], fetcher_lesson: JSON.stringify(techs), agent: 'fetcher' };
+  const body = lessonBody(job.topic, techs, { videos, date: new Date().toISOString().slice(0, 10), threshold: job.threshold }, safe.quarantined);
+  const meta = { type: 'reference', tags: ['lesson', 'fetcher'], fetcher_lesson: JSON.stringify(techs), fetcher_quarantine: JSON.stringify(safe.quarantined), agent: 'fetcher' };
   const rec = existing ? store.update(existing.id, { body, ...meta }) : store.create('note', { title, body, ...meta, ...(job.project ? { project: job.project } : {}) });
-  return { id: rec.id, techniques: techs.length, merged: !!existing };
+  return { id: rec.id, techniques: techs.length, quarantined: safe.quarantined.length, merged: !!existing };
 }
 
 /** Does an agent asking about the topic actually get the lesson? (Same search Cortex's recall uses.) */
