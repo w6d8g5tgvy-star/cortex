@@ -20,6 +20,27 @@ const POS = [
   [/\b(design|architecture|monetiz\w*|retention|ux|ui|performance|scal\w*|security|testing strategy)\b/i, 'is a craft where proven techniques matter'],
 ];
 const STUCK = /\b(failed|fails|failing|stuck|keeps? (breaking|failing)|didn'?t work|doesn'?t work|tried everything|no luck)\b/i;
+
+// Generic request words that say nothing about the topic itself.
+const COVER_STOP = new Set('what changed such way ways our find more best use top improve research proven first new old make how get help need want why when which does doing done thing things work works'.split(' '));
+/**
+ * Free check: does Cortex memory already cover this topic? Compares the topic's key words with each knowledge note
+ * of the project (and system notes); agent journals and the Fetcher's own lessons are left out.
+ * → [{ id, title, coverage }] for notes holding ≥ 65% of the key words (best first). Train AI round 4: research the
+ *   user's notes already answered cost money and produced nothing.
+ */
+function coverage(store, text, project, min = 0.65) {
+  const { tokenize } = require('./store');
+  const qt = [...new Set(tokenize(text).filter((w) => w.length > 2 && !COVER_STOP.has(w)))];
+  if (qt.length < 3) return [];
+  const f = project ? { kind: 'note', limit: 8, scope: 'project+system', projectScope: project } : { kind: 'note', limit: 8 };
+  return store.search(text, f)
+    .filter((h) => !h.rec.meta.agent_journal && !h.rec.meta.fetcher_lesson && !/^lesson:/i.test(h.rec.title))
+    .map((h) => { const nt = new Set(tokenize(`${h.rec.title} ${h.rec.body}`)); return { id: h.rec.id, title: h.rec.title, coverage: +(qt.filter((t) => nt.has(t)).length / qt.length).toFixed(2) }; })
+    .filter((c) => c.coverage >= min)
+    .sort((a, b) => b.coverage - a.coverage)
+    .slice(0, 3);
+}
 const TRIVIAL = /\b(typo|rename|bump|delete|remove|move|cleanup|clean up|fix (a |the )?link|readme|changelog|version number|format(ting)?)\b/i;
 
 /**
@@ -43,6 +64,10 @@ function advice(store, task) {
   try {
     out.lessons = require('./lesson-select').select(store, { project: t.meta.project, text, max: 3, minScore: 2 });
     if (out.lessons.length >= 2) { score -= 2; out.reasons.push(`− ${out.lessons.length} vetted lessons already fit: read those first.`); }
+  } catch { /* optional */ }
+  try {
+    out.covered = coverage(store, text, t.meta.project);
+    if (out.covered.length) { score -= 2; out.reasons.push(`− Cortex memory already covers most of this: "${out.covered[0].title}" holds ${Math.round(out.covered[0].coverage * 100)}% of the topic's key words. Read it first and research only what is missing.`); }
   } catch { /* optional */ }
   if (pending.length) { score -= 3; out.reasons.unshift('− A request for this task is already waiting for the user\'s OK.'); }
   if (active.length) { score -= 2; out.reasons.unshift('− Fetcher already ran (or is running) for this task: check fetcher_status first.'); }
@@ -70,4 +95,4 @@ function noteOnTask(store, taskId, text) {
   try { if (store.get(taskId)) store.update(taskId, { append: `**${new Date().toISOString().slice(0, 16).replace('T', ' ')} · Fetcher:** ${text}` }); } catch { /* task may be gone */ }
 }
 
-module.exports = { enabled, requests, advice, briefLines, noteOnTask };
+module.exports = { enabled, requests, advice, briefLines, noteOnTask, coverage };

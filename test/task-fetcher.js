@@ -67,6 +67,16 @@ store.update(tiny.id, { fetcher: 'on' });
 assert.equal(tf.enabled(store.get(tiny.id)), true);
 ok('each task has a Fetcher on/off switch; off refuses requests for that task');
 
+// --- memory coverage: a topic Cortex already knows is flagged, an unknown one is not ---
+store.create('project', { title: 'Mods' });
+store.create('note', { title: 'Mods: 26.2 API notes', project: 'mods', body: 'Minecraft 26.2 changes for the Fabric client mod: ResourceLocation is now Identifier; key mappings use KeyMappingHelper; screens render via extractRenderState; the current screen is mc.gui.screen().' });
+const known = store.create('task', { title: 'Research the Minecraft 26.2 Fabric API changes for our client mod (Identifier, key mappings, screens)', project: 'mods', body: 'Find the best practice for porting.' });
+const ak = tf.advice(store, known);
+assert.ok(ak.covered.length && ak.covered[0].title === 'Mods: 26.2 API notes', JSON.stringify(ak));
+assert.ok(ak.reasons.some((r) => r.includes('already covers')) && ak.recommend === false, JSON.stringify(ak));
+assert.deepStrictEqual(tf.coverage(store, 'speed up flaky Playwright end-to-end suites on CI', 'mods'), []);
+ok('free advice: flags topics Cortex memory already covers (and not unknown ones), so agents read before paying for research');
+
 fs.rmSync(vault, { recursive: true, force: true });
 console.log(`All ${passed} task Fetcher checks passed.`);
 process.exit(0);

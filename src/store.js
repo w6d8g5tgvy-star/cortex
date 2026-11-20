@@ -566,4 +566,4 @@ class Store extends EventEmitter {
   }
 }
 
-module.exports = { Store, ENUMS, slugify };
+module.exports = { Store, ENUMS, slugify, tokenize };
