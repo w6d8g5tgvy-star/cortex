@@ -483,6 +483,7 @@ async function openTask(id, defaults = {}) {
       <div class="field"><label>Details (Markdown) <span class="seg" style="float:right;text-transform:none"><button type="button" class="on" data-tm="edit">Edit</button><button type="button" data-tm="preview">Preview</button></span></label>
         <textarea class="input" id="t-body" rows="9" placeholder="Context, acceptance criteria, [[links]]…" style="font-family:var(--mono);font-size:13px">${esc(v.body || '')}</textarea>
         <div class="prose" id="t-prev" style="display:none;border:1px solid var(--line);border-radius:10px;padding:12px 14px;max-height:300px"></div></div>
+      ${t ? `<div class="field task-fx" id="t-fx"><label>Fetcher (research help for agents)</label><div class="muted small">Loading…</div></div>` : ''}
       ${t ? `<div class="small muted">Created ${timeAgo(t.created)}${t.created_by ? ' by ' + esc(t.created_by) : ''} · updated ${timeAgo(t.updated)}${t.completed ? ' · completed ' + timeAgo(t.completed) : ''}
         ${t.backlinks?.length ? `<br>Linked from: ${t.backlinks.map((b) => `<a href="javascript:void 0" data-open="${esc(b.id)}">${esc(b.title)}</a>`).join(', ')}` : ''}</div>` : ''}
     </div>
@@ -510,12 +511,37 @@ async function openTask(id, defaults = {}) {
     };
     $('#t-save', root).onclick = save;
     root.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) save(); });
+    if (t) renderTaskFetcher(t.id, $('#t-fx', root));
     if (t) $('#t-del', root).onclick = async () => {
       if (!confirm('Delete this task? (moved to vault trash)')) return;
       await api('/api/items?id=' + encodeURIComponent(t.id), { method: 'DELETE' }).catch(fail);
       closeModal(); refresh();
     };
   });
+}
+
+// Fetcher on a task: on/off switch, the free "is it worth it" check, and the requests agents made for this task.
+async function renderTaskFetcher(taskId, box) {
+  if (!box) return;
+  let d;
+  try { d = await api('/api/fetcher?task=' + encodeURIComponent(taskId)); } catch (e) { box.innerHTML = `<label>Fetcher</label><div class="muted small">${esc(e.message)}</div>`; return; }
+  const badge = (st) => ({ 'needs-approval': 'Waiting for your OK', queued: 'Queued', running: 'Researching', done: 'Done', rejected: 'Declined', error: 'Failed', stopped: 'Stopped' }[st] || st);
+  const reqs = d.jobs.map((j) => `
+    <div class="fx-req ${j.status === 'needs-approval' ? 'ask' : ''}">
+      <div><b>${esc(j.topic)}</b> <span class="fx-badge">${esc(badge(j.status))}</span><div class="small muted">from ${esc(j.from || 'agent')} · ${timeAgo(j.created)}${j.why ? ' · ' + esc(j.why) : ''}${j.lesson ? ` · lesson: <a href="javascript:void 0" data-open="${esc(j.lesson)}">${esc(j.lesson)}</a>` : ''}${j.videos ? ` · ${j.worth_it}/${j.videos} videos worth it` : ''}</div></div>
+      ${j.status === 'needs-approval' ? `<div class="fx-req-btns"><button type="button" class="btn sm primary" data-fx-ok="${esc(j.id)}">Approve</button><button type="button" class="btn sm" data-fx-no="${esc(j.id)}">Decline</button></div>` : ''}
+    </div>`).join('');
+  const a = d.advice;
+  box.innerHTML = `<label>Fetcher (research help for agents)
+      <span class="seg" style="float:right;text-transform:none"><button type="button" class="${d.enabled ? 'on' : ''}" data-fx-set="on">On</button><button type="button" class="${d.enabled ? '' : 'on'}" data-fx-set="off">Off</button></span></label>
+    <div class="small muted">${d.enabled ? `Agents working on this task may ask Fetcher to research a better way; requests appear here for your OK. Free check: <b>${a.recommend ? 'research looks worth it' : 'probably not needed'}</b>${a.reasons.length ? ` (${esc(a.reasons.slice(0, 2).map((r) => r.replace(/^[+−] /, '')).join(' '))})` : ''}.` : 'Off: agents cannot request Fetcher research for this task.'}</div>
+    ${reqs || (d.enabled ? '<div class="small muted" style="margin-top:6px">No requests yet.</div>' : '')}`;
+  $$('[data-fx-set]', box).forEach((b) => (b.onclick = async () => {
+    try { await api('/api/items', { method: 'PATCH', body: { id: taskId, fetcher: b.dataset.fxSet, quiet: true } }); renderTaskFetcher(taskId, box); } catch (e) { fail(e); }
+  }));
+  $$('[data-fx-ok],[data-fx-no]', box).forEach((b) => (b.onclick = async () => {
+    try { await api('/api/fetcher/approve', { method: 'POST', body: { id: b.dataset.fxOk || b.dataset.fxNo, reject: !!b.dataset.fxNo } }); toast(b.dataset.fxOk ? 'Approved: Fetcher is researching it' : 'Declined'); renderTaskFetcher(taskId, box); } catch (e) { fail(e); }
+  }));
 }
 
 // ---------- MEMORY ----------

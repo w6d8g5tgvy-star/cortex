@@ -46,6 +46,7 @@ function buildBrief(store, { project, task, assignment, runId }) {
   if (t) {
     lines.push(`## Your task: ${t.title} (${t.id})`, '', `Status: ${t.meta.status} · priority ${t.meta.priority || 'medium'}${t.meta.due ? ` · due ${t.meta.due}` : ''}`, '');
     if (t.body && t.body.trim()) lines.push(clip(t.body, 4000), '');
+    try { lines.push('### Fetcher (research help) for this task', '', ...require('./task-fetcher').briefLines(store, t), ''); } catch { /* optional */ }
   }
   try {
     const want = [t && t.title, t && t.body, assignment].filter(Boolean).join('\n');

@@ -151,10 +151,35 @@ async function apply(info) {
   return { from, to: pkg.version };
 }
 
+/**
+ * Keep a permanent copy of the version an update replaced (.update/backups/<version>-<date>/), newest 3 kept.
+ * The single .update/backup slot is overwritten by the next update; this copy is not. It protects code that only
+ * existed on this computer (never published) from being lost by an auto-update.
+ */
+function keepBackup(fromVersion) {
+  const backup = path.join(UPD, 'backup');
+  if (!fs.existsSync(backup)) return null;
+  const root = path.join(UPD, 'backups');
+  const name = `${String(fromVersion || 'unknown').replace(/[^0-9A-Za-z.-]/g, '_')}-${new Date().toISOString().slice(0, 10)}`;
+  const dest = path.join(root, name);
+  if (!fs.existsSync(dest)) {
+    fs.mkdirSync(root, { recursive: true });
+    fs.cpSync(backup, dest, { recursive: true });
+    fs.writeFileSync(path.join(dest, 'KEPT-BY-CORTEX.txt'), `This is the Cortex app as it was (version ${fromVersion}) before an update replaced it on ${new Date().toISOString()}.\nIf it contained changes that were never published, copy them back from here.\n`);
+  }
+  const all = fs.readdirSync(root).map((n) => ({ n, t: fs.statSync(path.join(root, n)).mtimeMs })).sort((a, b) => b.t - a.t);
+  for (const old of all.slice(3)) fs.rmSync(path.join(root, old.n), { recursive: true, force: true });
+  return dest;
+}
+
 /** Called by the new version once it has started successfully. */
 function confirm() {
   const p = readPending();
-  if (p && !p.confirmed) { p.confirmed = true; p.confirmedAt = new Date().toISOString(); writePending(p); return p; }
+  if (p && !p.confirmed) {
+    p.confirmed = true; p.confirmedAt = new Date().toISOString();
+    try { const kept = keepBackup(p.from); if (kept) p.keptBackup = kept; } catch { /* best effort */ }
+    writePending(p); return p;
+  }
   return null;
 }
 
@@ -176,4 +201,4 @@ async function rollback() {
   return true;
 }
 
-module.exports = { check, apply, confirm, rollback, readPending, cmpVer, currentVersion, untar, APP };
+module.exports = { keepBackup, check, apply, confirm, rollback, readPending, cmpVer, currentVersion, untar, APP };

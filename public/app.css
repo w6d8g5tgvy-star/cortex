@@ -526,3 +526,9 @@ textarea.input { resize: vertical; line-height: 1.55; }
 .fx-vid { border-top: 1px solid var(--line); padding: 10px 0; }
 .fx-score { display: inline-block; width: 70px; height: 6px; border-radius: 4px; background: rgba(255,255,255,.08); overflow: hidden; vertical-align: middle; }
 .fx-score > span { display: block; height: 6px; background: var(--aurora, #4f9cf9); }
+/* Fetcher requests on a task */
+.task-fx .fx-req{display:flex;gap:10px;align-items:center;justify-content:space-between;margin-top:8px;padding:9px 11px;border:1px solid var(--line);border-radius:10px;background:rgba(255,255,255,.02)}
+.task-fx .fx-req.ask{border-color:rgba(124,92,255,.55);box-shadow:0 0 0 1px rgba(124,92,255,.18) inset}
+.task-fx .fx-req-btns{display:flex;gap:6px;flex-shrink:0}
+.task-fx .fx-badge{font-size:11px;padding:1px 7px;border-radius:999px;border:1px solid var(--line);margin-left:4px;opacity:.85}
+@media (max-width:640px){.task-fx .fx-req{flex-direction:column;align-items:flex-start}}

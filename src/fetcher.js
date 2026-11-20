@@ -308,7 +308,7 @@ class Fetcher {
   }
   summary(job) {
     const top = job.videos.filter((v) => v.score != null).sort((a, b) => b.score - a.score).slice(0, 3).map((v) => ({ title: v.title, score: v.score, verdict: v.verdict }));
-    return { id: job.id, topic: job.topic, status: job.status, step: job.step, from: job.from, project: job.project, created: job.created, threshold: job.threshold, videos: job.videos.length, worth_it: job.videos.filter((v) => v.verdict === 'worth it').length, top, lesson: job.lesson ? job.lesson.id : undefined, learning: job.learning };
+    return { id: job.id, topic: job.topic, why: job.why, task: job.task, status: job.status, step: job.step, from: job.from, project: job.project, created: job.created, threshold: job.threshold, videos: job.videos.length, worth_it: job.videos.filter((v) => v.verdict === 'worth it').length, top, lesson: job.lesson ? job.lesson.id : undefined, learning: job.learning };
   }
 
   /** Jobs other processes queued (agents' MCP servers), and jobs a restart interrupted: run them here. */
@@ -320,14 +320,19 @@ class Fetcher {
     }
   }
 
-  create({ topic, why, project, maxVideos, model, queries, from = 'you', byAgent = false }, { start = true } = {}) {
+  create({ topic, why, project, maxVideos, model, queries, from = 'you', byAgent = false, task }, { start = true } = {}) {
     topic = clip(topic, 160);
     if (!topic || terms(topic).length === 0) throw new Error('Say what to research');
+    const tf = require('./task-fetcher');
+    const taskRec = task ? this.store.must(task) : null;
+    if (taskRec && taskRec.kind !== 'task') throw new Error(`Not a task: ${task}`);
+    if (taskRec && !tf.enabled(taskRec)) throw new Error(`Fetcher is turned off for the task "${taskRec.title}". The user can turn it on in the task.`);
+    if (taskRec && !project && taskRec.meta.project) project = taskRec.meta.project;
     const c = this.conf();
     const id = 'fx-' + crypto.randomBytes(5).toString('hex');
     const needsOk = byAgent && !c.autoRunAgentRequests;
     const job = {
-      id, topic, why: clip(why, 400) || undefined, project: project || undefined, from, created: new Date().toISOString(),
+      id, topic, why: clip(why, 400) || undefined, project: project || undefined, task: taskRec ? taskRec.id : undefined, from, created: new Date().toISOString(),
       maxVideos: Math.max(1, Math.min(12, Number(maxVideos) || c.maxVideos)), model: model || c.model, threshold: c.threshold,
       queries: buildQueries(topic, Array.isArray(queries) ? queries.slice(0, 3) : []),
       status: needsOk ? 'needs-approval' : 'queued', step: needsOk ? `Waiting for your OK (asked by ${from})` : 'Queued',
@@ -336,12 +341,13 @@ class Fetcher {
     this.save(job);
     this.store.log({ agent: from, action: 'fetcher.request', summary: `${needsOk ? 'Asked to research' : 'Research started'}: ${topic}${why ? ` (${clip(why, 100)})` : ''}`, project: job.project });
     this.card(job);
+    if (taskRec) tf.noteOnTask(this.store, taskRec.id, `${from} asked to research "${topic}"${why ? ` (${clip(why, 160)})` : ''}. ${needsOk ? '**Waiting for your OK**: approve or decline it in this task.' : 'Started (auto-run is on).'} (${id})`);
     if (!needsOk && start) this.start(id);
     return job;
   }
 
-  approve(id, { start = true } = {}) { const j = this.get(id); if (!j) throw new Error('Not found'); if (j.status !== 'needs-approval') return j; j.status = 'queued'; j.step = 'Queued'; this.save(j); this.card(j); if (start) this.start(id); return j; }
-  reject(id) { const j = this.get(id); if (!j) throw new Error('Not found'); j.status = 'rejected'; j.step = 'Declined by you'; this.save(j); this.card(j); return j; }
+  approve(id, { start = true } = {}) { const j = this.get(id); if (!j) throw new Error('Not found'); if (j.status !== 'needs-approval') return j; j.status = 'queued'; j.step = 'Queued'; this.save(j); this.card(j); if (j.task) require('./task-fetcher').noteOnTask(this.store, j.task, `You approved "${j.topic}" (${j.id}). Research started.`); if (start) this.start(id); return j; }
+  reject(id) { const j = this.get(id); if (!j) throw new Error('Not found'); j.status = 'rejected'; j.step = 'Declined by you'; this.save(j); this.card(j); if (j.task) require('./task-fetcher').noteOnTask(this.store, j.task, `You declined "${j.topic}" (${j.id}).`); return j; }
   remove(id) { fs.rmSync(this.file(id), { force: true }); sessions.remove && sessions.remove(this.vault, 'fetch-' + id); this.broadcast({ type: 'fetcher' }); }
 
   // A Live/Agents card so the user can watch the team work, like any other agent.

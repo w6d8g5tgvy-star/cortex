@@ -211,6 +211,11 @@ function mcpStdio() {
   assert.equal((await (await fetch(base + '/api/state')).json()).version, '9.0.0');
   ok('update downloaded, checksum verified, installed, and app restarted itself on 9.0.0');
   await sleep(8500); // new version confirms itself after 8s
+  const keptRoot = path.join(app, '.update', 'backups');
+  const kept = fs.existsSync(keptRoot) ? fs.readdirSync(keptRoot) : [];
+  assert.equal(kept.length, 1, 'the replaced version is kept permanently');
+  assert.ok(fs.existsSync(path.join(keptRoot, kept[0], 'src', 'server.js')) && fs.existsSync(path.join(keptRoot, kept[0], 'KEPT-BY-CORTEX.txt')));
+  ok('the replaced version is kept permanently in .update/backups (unpublished local changes are never lost)');
   // now publish a broken release and let it auto-install → must roll back to 9.0.0
   latest = '9.1.0';
   await fetch(base + '/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ updates: { auto: true } }) });

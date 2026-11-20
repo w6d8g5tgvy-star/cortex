@@ -436,6 +436,12 @@ function startServer({ store, port, host, token: cliToken }) {
     // ---- Fetcher: YouTube research + usefulness checker ----
     if (p === '/api/fetcher' && m === 'GET') {
       const ytdlp = !!(process.env.CORTEX_YTDLP || await require('./media').which('yt-dlp'));
+      const forTask = u.searchParams.get('task');
+      if (forTask) {
+        const tf = require('./task-fetcher');
+        const t = store.must(forTask);
+        return send(res, 200, { task: t.id, enabled: tf.enabled(t), advice: tf.advice(store, t), jobs: tf.requests(store, t.id).map((j) => fetcher.summary(j)) });
+      }
       return send(res, 200, { jobs: fetcher.list().slice(0, 40).map((j) => fetcher.summary(j)), settings: fetcher.conf(), ytdlp });
     }
     if (p === '/api/fetcher/job' && m === 'GET') {

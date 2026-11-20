@@ -143,7 +143,12 @@ function buildTools(store) {
       name: 'task_get',
       description: 'Get a task with its full description and links.',
       inputSchema: { type: 'object', required: ['id'], properties: { id: str('Task id or title') } },
-      run: (a) => { const r = store.must(a.id); return { ...store.toJSON(r), backlinks: store.backlinks(r.id).map((b) => b.id) }; },
+      run: (a) => {
+        const r = store.must(a.id);
+        const out = { ...store.toJSON(r), backlinks: store.backlinks(r.id).map((b) => b.id) };
+        if (r.kind === 'task') { try { const adv = require('./task-fetcher').advice(store, r); out.fetcher = { enabled: adv.enabled, recommend: adv.recommend, reasons: adv.reasons, pending_requests: adv.pending, how: 'See fetcher_advice / fetcher_request with task: "' + r.id + '"' }; } catch { /* optional */ } }
+        return out;
+      },
     },
     {
       name: 'task_create',
@@ -508,13 +513,24 @@ function buildTools(store) {
     },
     {
       name: 'fetcher_request',
-      description: 'Ask Cortex Fetcher to research a topic on YouTube: it finds videos, a usefulness checker scores how each would help agents do tasks, and worth-it techniques are saved as a "Lesson: <topic>" memory. Use it when you think there is a better or more efficient way to do something you are working on. The user approves agent requests first (unless they turned on auto-run). Check lessons later with memory_search.',
-      inputSchema: { type: 'object', properties: { topic: str('What to research, e.g. "faster test runs in large Node repos"'), why: str('What you were doing and what you hope to improve'), project: str('Project slug (optional)'), max_videos: { type: 'number', description: 'Videos to review with AI (default 5, max 12)' } }, required: ['topic'] },
+      description: 'Ask Cortex Fetcher to research a topic on YouTube: it finds videos, a usefulness checker scores how each would help agents do tasks, and worth-it techniques are saved as a "Lesson: <topic>" memory. First decide whether it is worth it: call fetcher_advice with your task (free), and only request when a proven technique would save more than the research costs. Pass your task id as `task`: the request then shows up on that task, and the user approves it there (it is refused if the user turned Fetcher off for the task). Carry on with your work; check fetcher_status and memory_search later.',
+      inputSchema: { type: 'object', properties: { topic: str('What to research, e.g. "faster test runs in large Node repos"'), why: str('What you were doing and what you hope to improve'), task: str('The task this is for (id or title): the request shows up on that task'), project: str('Project slug (optional)'), max_videos: { type: 'number', description: 'Videos to review with AI (default 5, max 12)' } }, required: ['topic'] },
       run: (a, ctx) => {
         const { Fetcher } = require('./fetcher');
         const f = new Fetcher({ store, runner: null });
-        const job = f.create({ topic: a.topic, why: a.why, project: a.project ? store.resolveProject(a.project) : undefined, maxVideos: a.max_videos, from: ctx.agent, byAgent: true }, { start: false });
-        return { id: job.id, status: job.status, message: job.status === 'needs-approval' ? 'Sent to the user for approval in Cortex → Fetcher. Carry on with your task; the lesson will be in memory if it is approved and worth it.' : 'Queued: Cortex will research it and save a lesson if anything is worth it. Carry on with your task.' };
+        const job = f.create({ topic: a.topic, why: a.why, task: a.task, project: a.project ? store.resolveProject(a.project) : undefined, maxVideos: a.max_videos, from: ctx.agent, byAgent: true }, { start: false });
+        return { id: job.id, status: job.status, task: job.task, message: job.status === 'needs-approval' ? `Sent to the user for approval${job.task ? ' on the task ' + job.task : ' in Cortex → Fetcher'}. Carry on with your task; the lesson will be in memory if it is approved and worth it.` : 'Queued: Cortex will research it and save a lesson if anything is worth it. Carry on with your task.' };
+      },
+    },
+    {
+      name: 'fetcher_advice',
+      description: 'Free check (no AI): is a Fetcher research request a good idea for this task? Returns whether Fetcher is turned on for the task, a recommendation with reasons, vetted lessons that already fit, and the task\'s earlier requests. Call it before fetcher_request.',
+      inputSchema: { type: 'object', required: ['task'], properties: { task: str('Task id or title') } },
+      run: (a) => {
+        const tf = require('./task-fetcher');
+        const t = store.must(a.task);
+        const adv = tf.advice(store, t);
+        return { task: t.id, ...adv, requests: tf.requests(store, t.id).slice(0, 8).map((j) => ({ id: j.id, topic: j.topic, status: j.status, lesson: j.lesson ? j.lesson.id : undefined })) };
       },
     },
     {
