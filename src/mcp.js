@@ -11,6 +11,9 @@ const mind = require('./mind');
 const brief = require('./brief');
 const skills = require('./skills');
 const VERSION = require('../package.json').version;
+// One-line reminder for cortex_start; the full rules are the server instructions every client gets at connect.
+const RULES_SHORT = 'Search (memory_search) before asking; read full notes with memory_get only when needed; save what you learn with memory_write (with project); keep tasks current (task_create/task_update); report steps with live_update; do commands_from_user and answer with command_complete; finish with activity_log.';
+const clipText = (s, n) => { s = String(s || '').replace(/\s+/g, ' ').trim(); return s.length > n ? s.slice(0, n - 1) + '…' : s || undefined; };
 
 const PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 
@@ -60,25 +63,32 @@ function buildTools(store) {
         const inbox = agents.claimInbox(store.vault, ctx.agent);
         const replies = agents.takeReplies(store.vault, ctx.agent);
         const others = agents.peers(store, { hours: 6, self: ctx.agent }).filter((p) => !p.you).slice(0, 8);
+        // Lean by design: this is loaded at the start of most sessions, so every field costs tokens each time.
+        // Full rules arrive with the server instructions at connect; whole notes are one memory_get away.
+        const mind = store.list('mind', { status: ['queued', 'fetched'], limit: 10 }).map((r) => ({ id: r.id, section: r.meta.section, title: r.title, url: r.meta.url, status: r.meta.status }));
+        const isJournal = (r) => r.meta.agent_journal;
+        const lean = (r) => { const v = noteView(store, r); return { id: v.id, title: v.title, type: v.type !== 'memory' ? v.type : undefined, pinned: v.pinned, updated: String(v.updated || '').slice(0, 10), excerpt: clipText(v.excerpt, 120) }; };
+        const pnotes = project ? store.list('note', { project, limit: 16 }) : [];
+        const snotes = store.list('note', { scope: 'system' });
         return {
           cortex_version: VERSION,
           you_are: ctx.agent,
-          instructions: INSTRUCTIONS,
+          rules: RULES_SHORT,
           user_instructions: ins.global || undefined,
           project_instructions: ins.project || undefined,
           commands_from_user: inbox.fromUser,
           ...(inbox.fromAgents.length ? { messages_from_agents: inbox.fromAgents } : {}),
           ...(replies.length ? { replies_from_agents: replies } : {}),
           ...(others.length ? { other_agents_active: others.map((p) => ({ agent: p.agent, family: p.family, last_seen: p.last_seen, project: p.project, step: p.step })) } : {}),
-          mind_queue: store.list('mind', { status: ['queued', 'fetched'], limit: 10 }).map((r) => ({ id: r.id, section: r.meta.section, title: r.title, url: r.meta.url, status: r.meta.status })),
+          ...(mind.length ? { mind_queue: mind } : {}),
           vault: store.vault,
-          stats: store.stats(),
           projects: store.list('project', { status: ['active', 'paused'] }).map((r) => projectView(store, r)),
-          open_tasks: store.list('task', { ...f, open: true, limit: 40 }).map((r) => taskView(store, r)),
-          ...(project ? { project_memories: store.list('note', { project, limit: 15 }).map((r) => noteView(store, r)) } : {}),
-          system_memories: store.list('note', { scope: 'system' }).filter((r) => r.meta.pinned === true || true).slice(0, 15).map((r) => noteView(store, r)),
-          memory_scopes: project ? `Project memories (notes/${project}/) apply only to this project; system memories (notes/) apply to all projects. Other projects' memories are not loaded.` : 'No project selected: only system memories are loaded. Pass project to load that project\'s memories.',
-          recent_activity: store.recentActivity({ project, limit: 15 }),
+          open_tasks: store.list('task', { ...f, open: true, limit: 30 }).map((r) => { const t = taskView(store, r); return { id: t.id, title: t.title, status: t.status, priority: t.priority !== 'medium' ? t.priority : undefined, project: project ? undefined : t.project, assignee: t.assignee, due: t.due }; }),
+          ...(project ? { project_memories: pnotes.filter((r) => !isJournal(r)).slice(0, 15).map(lean) } : {}),
+          system_memories: snotes.filter((r) => !isJournal(r)).slice(0, 12).map(lean),
+          journals: [...pnotes, ...snotes].filter(isJournal).map((r) => r.id),
+          memory_scopes: project ? `notes/${project}/ = this project only; notes/ = every project.` : 'No project given: only system memories (notes/) are listed. Pass project for its memories.',
+          recent_activity: store.recentActivity({ project, limit: 8 }).map((a) => ({ ts: String(a.ts || '').slice(0, 16), agent: a.agent, action: a.action, summary: clipText(a.summary, 160), ref: a.ref })),
         };
       },
     },
@@ -545,7 +555,8 @@ function createMcp(store) {
         const ctx = { agent: session.agent || 'agent', sessionId: session.id, local: session.local !== false };
         try {
           const out = await tool.run(args, ctx);
-          const text = typeof out === 'string' ? out : JSON.stringify(out, (k, v) => (v === undefined ? undefined : v), 2);
+          // Compact JSON: indentation is pure token cost for the model reading it.
+          const text = typeof out === 'string' ? out : JSON.stringify(out, (k, v) => (v === undefined ? undefined : v));
           return ok(id, { content: [{ type: 'text', text }], isError: false });
         } catch (e) {
           return ok(id, { content: [{ type: 'text', text: `Error: ${e.message}` }], isError: true });

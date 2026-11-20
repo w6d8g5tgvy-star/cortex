@@ -1,6 +1,6 @@
 {
   "name": "cortex-os",
-  "version": "1.2.6",
+  "version": "1.2.7",
   "description": "Local AI project manager and memory vault (Obsidian-compatible Markdown) with a built-in MCP server for AI agents.",
   "license": "MIT",
   "bin": {
@@ -14,7 +14,7 @@
     "start": "node bin/cortex.js start --open",
     "mcp": "node bin/cortex.js mcp",
     "config": "node bin/cortex.js config",
-    "test": "node test/smoke.js && node test/connect.js && node test/restart.js && node test/live.js && node test/features.js"
+    "test": "node test/smoke.js && node test/connect.js && node test/lean.js && node test/restart.js && node test/windows.js && node test/live.js && node test/features.js"
   },
   "engines": {
     "node": ">=18"

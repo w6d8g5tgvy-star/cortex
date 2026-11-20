@@ -8,7 +8,7 @@ const pkg = require('../package.json');
 const DEFAULTS = () => ({
   updates: { auto: true, source: (pkg.cortex && pkg.cortex.updateSource) || '', checkHours: 6 },
   remote: { enabled: false, token: '' },
-  screen: { enabled: false },
+  screen: { enabled: false, watch: [] },
   agents: { enabled: false, folders: [], permission: 'acceptEdits', maxMinutes: 120, saveGate: true, phoneApprovals: false, approvalWaitSeconds: 120, instructions: '' },
   connector: { token: '', tunnel: false, provider: 'cloudflare', lastUrl: '' },
   search: { semantic: true, model: 'nomic-embed-text' },

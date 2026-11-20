@@ -178,7 +178,7 @@ function render() {
   const v = S.route[0];
   main.classList.toggle('flush', v === 'memory' || v === 'graph');
   if (v !== 'graph') stopGraph();
-  if (v !== 'live') stopScreen();
+  if (v !== 'live') { stopScreen(); stopAiWindows(); }
   if (render.last !== v) { main.classList.remove('view-in'); void main.offsetWidth; main.classList.add('view-in'); render.last = v; }
   ({ mind: renderMind, skills: renderSkills, live: renderLive, home: renderHome, projects: renderProjects, board: renderBoard, memory: renderMemory, graph: renderGraph, agents: renderAgents, settings: renderSettings }[v])();
 }
@@ -1525,7 +1525,9 @@ async function renderLive(skipFetch) {
       ${S.local ? `<div class="actions"><button class="btn" data-go="settings">${icon('i-phone')} Connect your phone</button></div>` : ''}</div>
     <div id="approvals">${approvalsHtml()}</div>
     <div class="panel screen-panel" id="screen-panel">${screenPanelHtml()}</div>
+    <div class="panel" id="aiw-panel" style="margin-bottom:18px">${aiwPanelHtml()}</div>
     <div class="live-sessions" id="live-sessions"></div>`;
+  startAiWindows();
   const en = $('#scr-enable');
   if (en) en.onclick = () => api('/api/settings', { method: 'POST', body: { screen: { enabled: true } } }).then(() => renderLive()).catch(fail);
   const tg = $('#scr-toggle');
@@ -1549,6 +1551,106 @@ function screenPanelHtml() {
       <span style="margin-left:auto;display:flex;gap:6px"><button class="btn sm" id="scr-toggle">${LIVE.screenOn ? 'Pause' : 'Resume'}</button><button class="btn sm" id="scr-full" title="Full screen">⤢</button></span></h3>
     <div class="screen-box" id="scr-box"><img id="scr-img" alt="Live view of your computer screen"><div class="screen-msg" id="scr-msg">${LIVE.screenOn ? 'Connecting…' : 'Paused'}</div>
       <button class="btn sm scr-close" id="scr-close">${icon('i-x')} Close</button></div>`;
+}
+// ---------- AI windows: a live tile per AI app window, next to what that AI is doing in Cortex ----------
+const AIW = { data: null, timer: null, listTimer: null, big: '', urls: {}, showIdle: store.get('aiwIdle', false) };
+const familyOf = (name) => { const n = String(name || '').toLowerCase(); if (/anthropic|claude/.test(n)) return 'claude'; if (/openai|chatgpt|gpt|codex/.test(n)) return 'openai'; if (/cursor/.test(n)) return 'cursor'; return n; };
+function aiwPanelHtml() {
+  const d = AIW.data;
+  const head = `<h3>${icon('i-live')} AI windows <span class="small muted" style="text-transform:none;letter-spacing:0;font-weight:400">what each AI app on this computer is showing right now</span>
+    ${S.local ? '<span style="margin-left:auto"><button class="btn sm" id="aiw-pick">+ Watch another window</button></span>' : ''}</h3>`;
+  if (!d) return head + '<div class="small muted">Looking for AI apps…</div>';
+  if (!d.supported) return head + '<div class="empty">Window view works on Windows for now. The screen view above still shows everything.</div>';
+  if (!d.enabled) return head + '<div class="empty">Turn on screen sharing (above) to see your AI apps here.</div>';
+  if (d.error) return head + `<div class="empty">Could not list windows: ${esc(d.error)}</div>`;
+  const shown = aiwShown();
+  const idle = d.windows.filter((w) => !w.active);
+  const idleToggle = idle.length ? `<label class="small muted" style="display:inline-flex;gap:6px;align-items:center;margin-top:8px;cursor:pointer"><input type="checkbox" id="aiw-idle" ${AIW.showIdle ? 'checked' : ''}> Also show idle AI apps (${idle.length}: ${esc(idle.map((w) => w.app).join(', '))})</label>` : '';
+  if (!d.windows.length) return head + '<div class="empty">No AI app windows are open. Cortex looks for Claude, ChatGPT, Codex, Cursor, Windsurf, VS Code, terminals running Claude Code or Codex, and browser tabs on AI sites (the tab must be the active one). Use <b>Watch another window</b> for anything else.</div>';
+  if (!shown.length) return head + `<div class="empty">No agent is working in an AI app right now. A window shows up here while an agent is working in it (Cortex sees its session as active).</div>${idleToggle}`;
+  return head + `<div class="aiw-grid">${shown.map((w) => `<div class="aiw-tile ${AIW.big === w.id ? 'big' : ''}" data-aiw="${esc(w.id)}">
+      <div class="aiw-head"><span class="chip">${esc(w.app)}</span><span class="aiw-title" title="${esc(w.title)}">${esc(w.title)}</span>${w.kind === 'watched' && S.local ? `<button class="btn ghost sm" data-unwatch="${esc(w.process)}" data-unwatch-title="${esc((d.watch.find((x) => x.process.toLowerCase() === w.process.toLowerCase()) || {}).title || '')}" title="Stop watching">${icon('i-x')}</button>` : ''}</div>
+      <div class="aiw-img">${w.minimized ? '<div class="aiw-msg">Minimized: restore the window to see it</div>' : `<img alt="${esc(w.app)} window"><div class="aiw-msg">Loading…</div>`}</div>
+      <div class="aiw-foot" id="aiw-foot-${esc(w.id)}">${aiwStatus(w)}</div></div>`).join('')}</div>${idleToggle}`;
+}
+// Only windows where an agent is working (plus ones the user chose), unless "show idle" is on.
+const aiwShown = () => ((AIW.data && AIW.data.windows) || []).filter((w) => w.active || AIW.showIdle);
+// What this AI is doing according to Cortex: the newest active session of the same family.
+function aiwStatus(w) {
+  if (!w.family) return '<span class="small muted">Watched window</span>';
+  const x = (LIVE.sessions || []).find((s) => s.id === w.session)
+    || (LIVE.sessions || []).filter((s) => !s.archived && !s.launched && familyOf(s.agent) === w.family && Date.now() - Date.parse(s.updated) < 36e5 * 6).sort((a, b) => (a.updated < b.updated ? 1 : -1))[0];
+  if (!x) return '<span class="small muted">No Cortex activity from this AI in the last 6 hours</span>';
+  return `<span class="spill ${esc(x.status)}">${esc(STATUS_TEXT[x.status] || x.status)}</span> <span class="small"><b>${esc(x.agent)}</b>${x.model ? ' · ' + esc(shortModel(x.model)) : ''}: ${esc(x.step || x.title || '')}</span>`;
+}
+function stopAiWindows() { clearTimeout(AIW.timer); clearTimeout(AIW.listTimer); AIW.timer = AIW.listTimer = null; }
+function startAiWindows() {
+  stopAiWindows();
+  const auth = TOKEN ? { Authorization: 'Bearer ' + TOKEN } : {};
+  const bind = () => {
+    const pick = $('#aiw-pick');
+    if (pick) pick.onclick = aiwPicker;
+    const idle = $('#aiw-idle');
+    if (idle) idle.onchange = () => { AIW.showIdle = idle.checked; store.set('aiwIdle', AIW.showIdle); $('#aiw-panel').innerHTML = aiwPanelHtml(); bind(); };
+    $$('[data-aiw]').forEach((t) => (t.onclick = (e) => { if (e.target.closest('[data-unwatch]')) return; AIW.big = AIW.big === t.dataset.aiw ? '' : t.dataset.aiw; $$('[data-aiw]').forEach((x) => x.classList.toggle('big', x.dataset.aiw === AIW.big)); }));
+    $$('[data-unwatch]').forEach((b) => (b.onclick = async () => { await api('/api/windows/watch', { method: 'POST', body: { process: b.dataset.unwatch, title: b.dataset.unwatchTitle, remove: true } }).catch(fail); refreshList(); }));
+  };
+  const refreshList = async () => {
+    if (S.route[0] !== 'live') return;
+    if (!document.hidden) {
+      try {
+        const d = await api('/api/windows');
+        const changed = JSON.stringify((AIW.data || {}).windows || []) !== JSON.stringify(d.windows) || !AIW.data || AIW.data.enabled !== d.enabled || AIW.data.error !== d.error;
+        AIW.data = d;
+        const panel = $('#aiw-panel');
+        if (panel && changed) { panel.innerHTML = aiwPanelHtml(); bind(); }
+        else for (const w of d.windows) { const f = $('#aiw-foot-' + CSS.escape(w.id)); if (f) f.innerHTML = aiwStatus(w); }
+      } catch { /* keep the last view */ }
+    }
+    AIW.listTimer = setTimeout(refreshList, 4000);
+  };
+  // One frame at a time, round-robin over the visible tiles; the enlarged tile refreshes every round.
+  let turn = 0;
+  const frame = async () => {
+    if (S.route[0] !== 'live') return;
+    const d = AIW.data;
+    const tiles = d && d.enabled ? aiwShown().filter((w) => !w.minimized) : [];
+    if (!document.hidden && tiles.length) {
+      const w = AIW.big && tiles.some((t) => t.id === AIW.big) && turn % 2 === 0 ? tiles.find((t) => t.id === AIW.big) : tiles[turn % tiles.length];
+      turn++;
+      const tile = $(`[data-aiw="${CSS.escape(w.id)}"]`);
+      const img = tile && tile.querySelector('img');
+      const msg = tile && tile.querySelector('.aiw-msg');
+      if (img) {
+        try {
+          const r = await fetch(`/api/windows/shot?id=${encodeURIComponent(w.id)}&w=${AIW.big === w.id ? 1600 : 720}&t=${Date.now()}`, { headers: auth });
+          if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
+          const url = URL.createObjectURL(await r.blob());
+          const old = AIW.urls[w.id];
+          img.onload = () => { if (old) URL.revokeObjectURL(old); };
+          img.src = url; AIW.urls[w.id] = url;
+          if (msg) msg.style.display = 'none';
+        } catch (e) { if (msg) { msg.style.display = ''; msg.textContent = e.message; } }
+      }
+    }
+    AIW.timer = setTimeout(frame, tiles.length ? Math.max(350, 1500 / tiles.length) : 1500);
+  };
+  refreshList().then(() => frame());
+}
+async function aiwPicker() {
+  const d = await api('/api/windows/all').catch(fail);
+  if (!d) return;
+  const ai = new Set(((AIW.data || {}).windows || []).map((w) => `${w.process}|${w.title}`));
+  modal(`<div class="modal-head"><h2>Watch another window</h2><button class="btn ghost sm" data-close>${icon('i-x')}</button></div>
+    <div class="modal-body"><p class="small muted" style="margin-top:0">Pick a window to show in the AI windows panel, for example a browser with an AI tab. Only windows you pick here (and AI apps) are ever captured. It matches by app and window title, so it keeps working after a restart.</p>
+    ${d.windows.map((w, i) => `<div class="row" style="padding:6px 0;border-bottom:1px solid var(--line)"><div style="flex:1;min-width:0"><b>${esc(w.process)}</b> <span class="small muted">${esc(w.title)}</span></div>${ai.has(`${w.process}|${w.title}`) ? '<span class="chip ok">AI app</span>' : `<button class="btn sm" data-watch="${i}">Watch</button>`}</div>`).join('') || '<div class="empty">No windows found.</div>'}</div>`,
+  (root) => $$('[data-watch]', root).forEach((b) => (b.onclick = async () => {
+    const w = d.windows[Number(b.dataset.watch)];
+    // a browser's title changes with the tab, so watch the whole app; other apps match on their title too
+    const title = /^(msedge|chrome|firefox|brave|opera|vivaldi|arc)$/i.test(w.process) ? '' : w.title;
+    await api('/api/windows/watch', { method: 'POST', body: { process: w.process, title, label: title ? w.title.slice(0, 40) : w.process } }).catch(fail);
+    closeModal(); AIW.data = null; startAiWindows();
+  })));
 }
 function stopScreen() { clearTimeout(LIVE.timer); LIVE.timer = null; }
 function startScreen() {

@@ -12,6 +12,7 @@ const { snippets } = require('./snippets');
 const sessions = require('./sessions');
 const settingsMod = require('./settings');
 const screen = require('./screen');
+const winmod = require('./windows');
 const updater = require('./updater');
 const claudeHooks = require('./claude-hooks');
 const agents = require('./agents');
@@ -110,6 +111,22 @@ function startServer({ store, port, host, token: cliToken }) {
   setTimeout(semIndex, 5000).unref();
   store.on('change', () => { clearTimeout(semTimer); semTimer = setTimeout(semIndex, 15000); semTimer.unref(); });
   const runner = new AgentRunner(store);
+  // AI window list (refreshed at most every 2 s) and per-window captures shared by all viewers (1.2 s).
+  const winState = { list: [], listAt: 0, listing: null, shots: new Map() };
+  const aiWindows = async () => {
+    if (Date.now() - winState.listAt < 2000) return winState.list;
+    if (!winState.listing) winState.listing = winmod.listAi(conf().screen.watch || []).then((l) => { winState.list = l; winState.listAt = Date.now(); return l; }).finally(() => { winState.listing = null; });
+    return winState.listing;
+  };
+  const windowShot = (id, maxW) => {
+    const c = winState.shots.get(id);
+    if (c && (c.pending || Date.now() - c.ts < 1200)) return c.pending || Promise.resolve(c.shot);
+    const entry = { ts: 0, shot: null };
+    entry.pending = winmod.captureWindow(id, maxW).then((shot) => { entry.shot = shot; entry.ts = Date.now(); return shot; }).finally(() => { entry.pending = null; });
+    winState.shots.set(id, entry);
+    if (winState.shots.size > 40) winState.shots.delete(winState.shots.keys().next().value);
+    return entry.pending;
+  };
   const tunnel = new PublicLink(port, () => conf().connector.provider);
   // Remember the last public link so a change (quick tunnels get a new random address on every restart)
   // is announced in the activity feed instead of silently breaking saved connectors.
@@ -394,6 +411,61 @@ function startServer({ store, port, host, token: cliToken }) {
       if (!f || !fs.existsSync(f.file)) return send(res, 404, { error: 'No snapshot' });
       res.writeHead(200, { 'Content-Type': f.mime, 'Cache-Control': 'no-store' });
       return fs.createReadStream(f.file).pipe(res);
+    }
+    // ---- live view of each AI app's window (Windows) ----
+    if (p === '/api/windows' && m === 'GET') {
+      const s = conf().screen;
+      if (!winmod.supported) return send(res, 200, { supported: false, enabled: s.enabled, windows: [], watch: s.watch || [] });
+      if (!s.enabled) return send(res, 200, { supported: true, enabled: false, windows: [], watch: s.watch || [] });
+      try {
+        const list = await aiWindows();
+        // A window counts as "showing agent work" only while an agent of that AI is active in Cortex
+        // (working / waiting for you, or busy in the last 3 minutes). Background runs started by Cortex
+        // have no window, so they don't count. Windows the user explicitly chose to watch always show.
+        const busy = sessions.list(vault).filter((x) => !x.archived && !x.launched && (['working', 'needs-you'].includes(x.status) || Date.now() - Date.parse(x.updated) < 180000));
+        const windows = list.map((w) => {
+          const sess = w.family ? busy.filter((x) => agents.family(x.agent) === w.family).sort((a, b) => (a.updated < b.updated ? 1 : -1))[0] : null;
+          return { id: w.id, app: w.app, family: w.family, kind: w.kind, title: w.title, process: w.process, minimized: w.minimized, w: w.w, h: w.h, active: w.kind === 'watched' || !!sess, session: sess ? sess.id : undefined };
+        });
+        return send(res, 200, { supported: true, enabled: true, windows, watch: s.watch || [] });
+      } catch (e) { return send(res, 200, { supported: true, enabled: true, windows: [], watch: s.watch || [], error: e.message }); }
+    }
+    if (p === '/api/windows/all' && m === 'GET') {
+      if (!localOnly()) return;
+      if (!winmod.supported) return send(res, 200, { windows: [] });
+      try { return send(res, 200, { windows: (await winmod.listAll()).map((w) => ({ process: w.process, title: w.title, minimized: w.minimized })) }); } catch (e) { return send(res, 500, { error: e.message }); }
+    }
+    if (p === '/api/windows/watch' && m === 'POST') {
+      if (!localOnly()) return;
+      const b = await json();
+      const proc = String(b.process || '').trim().slice(0, 80);
+      if (!/^[\w .\-]+$/.test(proc)) return send(res, 400, { error: 'Pick a window to watch' });
+      const title = String(b.title || '').trim().slice(0, 120);
+      const cur = (conf().screen.watch || []).filter((w) => !(w.process.toLowerCase() === proc.toLowerCase() && (w.title || '') === title));
+      const next = b.remove ? cur : [...cur, { process: proc, title, label: String(b.label || title || proc).slice(0, 60) }].slice(-20);
+      settingsMod.update(vault, { screen: { watch: next } });
+      winState.listAt = 0;
+      store.log({ agent: 'you', action: 'settings', summary: `${b.remove ? 'Stopped watching' : 'Watching'} window: ${proc}${title ? ' · ' + title : ''}` });
+      return send(res, 200, { watch: next });
+    }
+    if (p === '/api/windows/shot' && m === 'GET') {
+      if (!conf().screen.enabled) return send(res, 403, { error: 'Screen sharing is turned off. Enable it in Settings on your computer.' });
+      if (!winmod.supported) return send(res, 400, { error: 'Window capture works on Windows only for now' });
+      const id = String(u.searchParams.get('id') || '');
+      // Only AI windows (or ones the user chose to watch) can be captured: never any other window.
+      const list = await aiWindows().catch(() => []);
+      if (!list.some((w) => w.id === id)) return send(res, 404, { error: 'That window is not an AI app you are watching (it may have closed)' });
+      try {
+        const shot = await windowShot(id, Number(u.searchParams.get('w')) || 960);
+        if (shot.state) return send(res, 409, { state: shot.state, error: shot.state === 'minimized' ? 'Minimized: restore the window to see it' : 'The window closed' });
+        if (!local) {
+          const nowT = Date.now();
+          if (!handleApi.lastView || nowT - handleApi.lastView > 20000) broadcast({ type: 'screen-viewed', ip: req.socket.remoteAddress });
+          handleApi.lastView = nowT;
+        }
+        res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'no-store', 'Content-Length': shot.buf.length });
+        return res.end(shot.buf);
+      } catch (e) { return send(res, 500, { error: e.message }); }
     }
     if (p === '/api/screen' && m === 'GET') {
       if (!conf().screen.enabled) return send(res, 403, { error: 'Screen sharing is turned off. Enable it in Settings on your computer.' });

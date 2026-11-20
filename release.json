@@ -1,7 +1,7 @@
 {
-    "version":  "1.2.6",
+    "version":  "1.2.7",
     "branch":  "main",
     "url":  "https://codeload.github.com/w6d8g5tgvy-star/cortex/tar.gz/refs/heads/main",
-    "notes":  "Agents tab shows the model and token usage of every chat, a by-model usage breakdown, and today\u0027s account-wide usage by model. Claude Code sessions run outside Cortex now report their model and tokens through the hooks.",
-    "date":  "2026-11-20T02:36:18.430Z"
+    "notes":  "Live view of each AI app window (only while an agent is working in it; AI windows only; works when covered; fast capture helper). Lower token use: lean cortex_start, the Claude Code brief replaces cortex_start, short brief on resume, no recall on trivial prompts or repeated notes, compact JSON replies.",
+    "date":  "2026-11-20T02:55:00.343Z"
 }

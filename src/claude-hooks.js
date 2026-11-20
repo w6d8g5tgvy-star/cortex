@@ -171,6 +171,10 @@ function sessionContext(vault, cwd, source) {
   const journal = require('./journal');
   const brief = require('./brief');
   const project = journal.projectForFolder(vault, cwd);
+  // A resumed conversation still holds the brief from its start; only clear/compact/startup need it in full.
+  if (source === 'resume') {
+    return { project, text: `[Cortex] Resumed session${project ? ` (project "${project}")` : ''}: the Cortex brief from the start of this conversation still applies. Use memory_search for anything newer.` };
+  }
   const store = loadStore(vault);
   const b = brief.buildBrief(store, { project });
   const header = project
@@ -193,13 +197,25 @@ function mentionedProject(store, prompt) {
   return best && best.slug;
 }
 
-function recall(vault, project, prompt) {
+// Short replies ("yes", "continue", "do it") carry no topic to recall for: skip them.
+const TRIVIAL = /^(y|yes|yeah|yep|no|nope|ok(ay)?|sure|continue|go( on| ahead)?|thanks?( you)?|ty|do it|proceed|next|done|stop|retry|again|please)\b[\s.!,]*(please|thanks?)?[\s.!]*$/i;
+function isTrivialPrompt(prompt) {
+  const p = String(prompt || '').trim();
+  return !p || TRIVIAL.test(p) || p.split(/\s+/).filter((w) => w.length > 2).length < 2;
+}
+
+/** Notes related to the prompt, minus ones already given in this session (seen: { id: updated }). */
+function recall(vault, project, prompt, seen = {}) {
+  if (isTrivialPrompt(prompt)) return { text: '', ids: {} };
   const store = loadStore(vault);
   project = project || mentionedProject(store, prompt);
-  const f = project ?{ scope: 'project+system', projectScope: project } : { scope: 'system' };
-  const hits = store.search(prompt, { kind: 'note', limit: 5, minMatch: 1, ...f }).filter((h) => !h.rec.meta.agent_journal && h.score >= 6);
-  if (!hits.length) return '';
-  return clip('[Cortex] Memories related to this request (read the full note with memory_get if relevant):\n' + hits.map((h) => `- ${h.rec.title} (${h.rec.id}${h.rec.meta.project ? '' : ', system'}): ${h.snippet}`).join('\n'), 3500);
+  const f = project ? { scope: 'project+system', projectScope: project } : { scope: 'system' };
+  const hits = store.search(prompt, { kind: 'note', limit: 6, minMatch: 1, ...f })
+    .filter((h) => !h.rec.meta.agent_journal && h.score >= 6 && seen[h.rec.id] !== String(h.rec.meta.updated || ''))
+    .slice(0, 4);
+  if (!hits.length) return { text: '', ids: {} };
+  const ids = Object.fromEntries(hits.map((h) => [h.rec.id, String(h.rec.meta.updated || '')]));
+  return { ids, text: clip('[Cortex] Related memories (memory_get for the full note):\n' + hits.map((h) => `- ${h.rec.title} (${h.rec.id}${h.rec.meta.project ? '' : ', system'}): ${clip(h.snippet, 150)}`).join('\n'), 1400) };
 }
 
 async function waitForApproval(vault, sid, input) {
@@ -275,7 +291,11 @@ async function runHook(input, vault) {
     // each prompt starts a new "turn": reset what we track for the journal and the save gate
     sessions.upsert(vault, id, { ...base, project, title: prompt.slice(0, 140) || (existing && existing.title) || 'Claude Code session', status: 'working', step: 'Thinking…', progress: null, turnPrompt: prompt.slice(0, 600), files: [], commands: 0, saved: false, gateUsed: false }, { kind: 'prompt', text: `▶ ${prompt.slice(0, 300)}` });
     const parts = [];
-    try { const r = recall(vault, project, prompt); if (r) parts.push(r); } catch { /* recall is best effort */ }
+    try {
+      const seen = (existing && existing.recalled) || {};
+      const r = recall(vault, project, prompt, seen);
+      if (r.text) { parts.push(r.text); sessions.upsert(vault, id, { recalled: { ...seen, ...r.ids } }); }
+    } catch { /* recall is best effort */ }
     const msgs = sessions.takeMessages(vault, id);
     if (msgs.length) parts.push(formatMessages(msgs));
     const cmds = commandsText(vault);

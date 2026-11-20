@@ -23,28 +23,29 @@ function buildBrief(store, { project, task, assignment, runId }) {
     lines.push(`## Project: ${p.title} (${'projects/' + p.slug})`, '');
     if (p.meta.description) lines.push(p.meta.description, '');
     if (ins.project) lines.push('### Project instructions (follow these)', '', ins.project, '');
-    if (p.body && p.body.trim()) lines.push('### Overview', '', clip(p.body, 3000), '');
+    if (p.body && p.body.trim()) lines.push('### Overview', '', clip(p.body, 1500), '');
     const open = store.list('task', { project: p.slug, open: true, limit: 25 });
     if (open.length) lines.push('### Open tasks', '', ...open.map((r) => `- [${r.meta.status}] ${r.title} (${r.id}, ${r.meta.priority || 'medium'})`), '');
     const notes = store.list('note', { project: p.slug, limit: 15 }).filter((r) => !r.meta.agent_journal);
-    if (notes.length) lines.push(`### Project memories: notes/${p.slug}/ (apply only to this project; read the ones you need with memory_get)`, '', ...notes.map((r) => `- ${r.title} (${r.id})${r.meta.pinned ? ' [pinned]' : ''}: ${clip(String(r.body).replace(/^#.*$/m, '').replace(/\s+/g, ' '), 160)}`), '');
+    if (notes.length) lines.push(`### Project memories: notes/${p.slug}/ (apply only to this project; read the ones you need with memory_get)`, '', ...notes.map((r) => `- ${r.title} (${r.id})${r.meta.pinned ? ' [pinned]' : ''}: ${clip(String(r.body).replace(/^#.*$/m, '').replace(/\s+/g, ' '), 110)}`), '');
     const journal = store.list('note', { project: p.slug }).find((r) => r.meta.agent_journal);
     if (journal) {
-      const recent = String(journal.body).split('\n').filter((l) => /^(- \d\d:\d\d|### |\*\*(Asked|Outcome))/.test(l)).slice(-12);
-      if (recent.length) lines.push(`### Recent agent work on this project (from ${journal.id})`, '', ...recent.map((l) => clip(l, 240)), '');
+      const recent = String(journal.body).split('\n').filter((l) => /^(- \d\d:\d\d|### |\*\*(Asked|Outcome))/.test(l)).slice(-8);
+      if (recent.length) lines.push(`### Recent agent work on this project (from ${journal.id})`, '', ...recent.map((l) => clip(l, 180)), '');
     }
   }
   // system memories (notes/ root, no project) apply to every project
   const sys = store.list('note', { scope: 'system' }).filter((r) => !r.meta.agent_journal);
   const sysPinned = sys.filter((r) => r.meta.pinned === true).slice(0, 8);
   const sysRecent = sys.filter((r) => r.meta.pinned !== true).slice(0, 8);
-  if (sysPinned.length || sysRecent.length) lines.push('### System memories: notes/ (apply to every project)', '', ...[...sysPinned, ...sysRecent].map((r) => `- ${r.title} (${r.id})${r.meta.pinned ? ' [pinned]' : ''}: ${clip(String(r.body).replace(/^#.*$/m, '').replace(/\s+/g, ' '), 180)}`), '');
+  if (sysPinned.length || sysRecent.length) lines.push('### System memories: notes/ (apply to every project)', '', ...[...sysPinned, ...sysRecent].map((r) => `- ${r.title} (${r.id})${r.meta.pinned ? ' [pinned]' : ''}: ${clip(String(r.body).replace(/^#.*$/m, '').replace(/\s+/g, ' '), r.meta.pinned ? 220 : 110)}`), '');
   if (t) {
     lines.push(`## Your task: ${t.title} (${t.id})`, '', `Status: ${t.meta.status} · priority ${t.meta.priority || 'medium'}${t.meta.due ? ` · due ${t.meta.due}` : ''}`, '');
     if (t.body && t.body.trim()) lines.push(clip(t.body, 4000), '');
   }
   if (assignment && String(assignment).trim()) lines.push(t ? '## Extra instructions from the user' : '## Your assignment', '', String(assignment).trim(), '');
   lines.push('## How to work with Cortex',
+    '- This brief already contains what `cortex_start` and `project_brief` return: do not call them again. Read a listed memory in full with `memory_get` only when you need it.',
     '- Use the `cortex` MCP tools if they are available. Search memory (`memory_search`) before assuming anything or asking the user.',
     `- Report progress with \`live_update\` at each major step${runId ? '' : ''}; follow any messages_from_user or commands_from_user it returns.`,
     t ? `- Keep the task current: \`task_update\` id "${t.id}" with status doing/blocked/done and short progress notes.` : '- Create or update tasks with `task_create` / `task_update` for work that will take more than one step.',

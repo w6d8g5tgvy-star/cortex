@@ -37,7 +37,9 @@ async function capture() {
     if (process.platform === 'darwin') {
       await run('screencapture', ['-x', '-t', 'jpg', out]);
     } else if (process.platform === 'win32') {
-      const ps = `Add-Type -AssemblyName System.Windows.Forms,System.Drawing;
+      // Fast path: the long-running capture helper (no new PowerShell per frame). Falls back below.
+      try { return await require('./windows').captureScreen(1920); } catch { /* fall back to a one-off capture */ }
+      const ps =`Add-Type -AssemblyName System.Windows.Forms,System.Drawing;
 $b=[System.Windows.Forms.SystemInformation]::VirtualScreen;
 $bmp=New-Object System.Drawing.Bitmap $b.Width,$b.Height;
 $g=[System.Drawing.Graphics]::FromImage($bmp);
