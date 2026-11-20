@@ -1,7 +1,7 @@
 {
-  "version": "2.0.1",
+  "version": "2.1.0",
   "branch": "main",
   "url": "https://codeload.github.com/w6d8g5tgvy-star/cortex/tar.gz/refs/heads/main",
-  "notes": "Cortex 2.0.1: everything in 2.0 (Fetcher per task with approvals on the task, lesson safety, lessons served like skills, experience digest, new Fetcher screen, phone_link, permanent backups on update) plus: lessons are served to agents in full. A Train AI test showed a clipped lesson taught Claude Haiku only half the rules (0/6); full lessons took it to 6/6.",
-  "date": "2026-11-20T22:11:14.577Z"
+  "notes": "Cortex 2.1: Fetcher 2 from your PC is merged in (smarter planning, skim reader, tryouts on real tasks, lesson feedback, usage levels and daily budget, model reporting, easier setup) together with everything from 2.0 (Fetcher switch and approvals on each task, lesson safety, lessons served in full, experience digest, new Fetcher screen, phone link, permanent backups on update).",
+  "date": "2026-11-20T22:19:00.530Z"
 }
