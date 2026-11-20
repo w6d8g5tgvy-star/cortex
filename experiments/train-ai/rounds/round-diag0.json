@@ -1,0 +1,190 @@
+{
+  "summary": {
+    "round": "diag0",
+    "model": "claude-haiku-5-5",
+    "trials": 1,
+    "snapshot": "C:/Users/sheri/Cortex-train/snapshot-r0",
+    "passes": 0,
+    "runs": 4,
+    "pass_rate": 0,
+    "run_cost": 0.0126,
+    "training_cost": 0,
+    "total_cost": 0.0126,
+    "E": 0,
+    "avg_turns": 5.3,
+    "out_tokens": 5120,
+    "in_tokens": 301797,
+    "avg_seconds": 14.5,
+    "by_task": {
+      "publish": "0/1",
+      "pairing": "0/1",
+      "update": "0/1",
+      "skills": "0/1"
+    }
+  },
+  "date": "2026-11-20T23:15:27.599Z",
+  "runs": [
+    {
+      "task": "pairing",
+      "trial": 1,
+      "pass": false,
+      "passed": 0,
+      "total": 3,
+      "failures": [
+        "[\"https://home.example.ts.net\",\"abc123\"] → \"https://home.example.ts.net/?token=abc123#/fetcher\"",
+        "[\"http://10.0.0.5:7777\",\"Zz9-x\"] → \"http://10.0.0.5:7777/?token=Zz9-x#/fetcher\"",
+        "[\"https://pc.example.ts.net\",\"a b&c\"] → \"https://pc.example.ts.net/?token=a%20b%26c#/fetcher\""
+      ],
+      "ms": 12752,
+      "cost": 0.0026338900000000003,
+      "turns": 4,
+      "out_tokens": 882,
+      "in_tokens": 52624,
+      "calls": [
+        {
+          "tool": "cortex_start",
+          "input": "{\"model\":\"claude-haiku-5-5\"}",
+          "result_chars": 3437
+        },
+        {
+          "tool": "memory_search",
+          "input": "{\"query\":\"pairing link phone token\"}",
+          "result_chars": 767
+        },
+        {
+          "tool": "activity_log",
+          "input": "{\"summary\":\"Wrote pairingLink(baseUrl, token) for the phone pairing link, using the format from the agent journal: <base>/?token=<token>#/fetcher. Not run again",
+          "result_chars": 361
+        }
+      ],
+      "answer": "```js\nfunction pairingLink(baseUrl, token) {\n  const base = String(baseUrl).replace(/\\/+$/, \"\");\n  return `${base}/?token=${encodeURIComponent(token)}#/fetcher`;\n}\n```"
+    },
+    {
+      "task": "publish",
+      "trial": 1,
+      "pass": false,
+      "passed": 1,
+      "total": 4,
+      "failures": [
+        "[\"16+\"] → [\"2-step-verification\",\"age-check\"]",
+        "[\"trusted-friends\"] → [\"2-step-verification\"]",
+        "[\"all-ages\"] → [\"2-step-verification\",\"age-check\",\"id-verification\"]"
+      ],
+      "ms": 15754,
+      "cost": 0.00332703,
+      "turns": 5,
+      "out_tokens": 1596,
+      "in_tokens": 71780,
+      "calls": [
+        {
+          "tool": "cortex_start",
+          "input": "{\"model\":\"claude-haiku-5-5\"}",
+          "result_chars": 3437
+        },
+        {
+          "tool": "memory_search",
+          "input": "{\"query\":\"Roblox publishing requirements audience age check id verification\"}",
+          "result_chars": 1006
+        },
+        {
+          "tool": "memory_search",
+          "input": "{\"query\":\"publish audience tier 2-step verification ID verification Roblox Plus\",\"project\":\"roblox-games\"}",
+          "result_chars": 29
+        },
+        {
+          "tool": "activity_log",
+          "input": "{\"project\":\"roblox-games\",\"summary\":\"Wrote publishRequirements(audience) mapping for Roblox publishing tiers. Cortex had no stored tier policy, so the mapping i",
+          "result_chars": 410
+        }
+      ],
+      "answer": "```js\n// Not checked against Roblox's live publishing policy; Cortex had no stored tier rules.\nfunction publishRequirements(audience) {\n  const requirements = {\n    \"personal\": [],\n    \"trusted-friends\": [\"2-step-verification\"],\n    \"16+\": [\"2-step-verification\", \"age-check\"],\n    \"all-ages\": [\"2-step-verification\", \"age-check\", \"id-verification\"]\n  };\n  const list = requirements[audience];\n  if (!list) {\n    throw new Error(`Unknown audience: ${audience}`);\n  }\n  return [...list].sort();\n}\n```"
+    },
+    {
+      "task": "skills",
+      "trial": 1,
+      "pass": false,
+      "passed": 3,
+      "total": 5,
+      "failures": [
+        "[[\"SKILL.md\",\".cortex-managed\"]] → false",
+        "[[\".cortex-managed\",\"SKILL.md\",\"notes.md\"]] → false"
+      ],
+      "ms": 13492,
+      "cost": 0.00334154,
+      "turns": 7,
+      "out_tokens": 1082,
+      "in_tokens": 91807,
+      "calls": [
+        {
+          "tool": "cortex_start",
+          "input": "{\"model\":\"claude-haiku-5-5\"}",
+          "result_chars": 3437
+        },
+        {
+          "tool": "memory_search",
+          "input": "{\"query\":\"skill overwrite remove folder rules\"}"
+        },
+        {
+          "tool": "skill_list",
+          "input": "{}",
+          "result_chars": 310
+        },
+        {
+          "tool": "memory_get",
+          "input": "{\"id\":\"notes/cortex/user-preferences-and-working-style\"}",
+          "result_chars": 2089
+        },
+        {
+          "tool": "memory_search",
+          "input": "{\"query\":\"skill folder SKILL.md managed by Cortex marker\",\"limit\":5}",
+          "result_chars": 29
+        },
+        {
+          "tool": "activity_log",
+          "input": "{\"summary\":\"Checked Cortex skill rules: the user's preferences note says skills must never remove or overwrite the user's existing skills. No Cortex-owned marke",
+          "result_chars": 385
+        }
+      ],
+      "answer": "```js\nfunction mayOverwriteSkill(fileNames) {\n  // Cortex rule: skills must never remove or overwrite the user's existing skills.\n  // No Cortex-owned marker file is defined, so no existing skill folder qualifies.\n  return false;\n}\n```"
+    },
+    {
+      "task": "update",
+      "trial": 1,
+      "pass": false,
+      "passed": 4,
+      "total": 6,
+      "failures": [
+        "[{\"supervised\":true,\"uptimeSec\":9,\"crashed\":false}] → \"pending\"",
+        "[{\"supervised\":true,\"uptimeSec\":60,\"crashed\":false}] → \"pending\""
+      ],
+      "ms": 15890,
+      "cost": 0.0032631599999999998,
+      "turns": 5,
+      "out_tokens": 1560,
+      "in_tokens": 85586,
+      "calls": [
+        {
+          "tool": "memory_search",
+          "input": "{\"query\":\"updater rolled-back pending confirmed supervised crashed\",\"model\":\"claude-haiku-5-5\"}",
+          "result_chars": 394
+        },
+        {
+          "tool": "memory_get",
+          "input": "{\"id\":\"notes/cortex/agent-journal\"}",
+          "result_chars": 1433
+        },
+        {
+          "tool": "memory_search",
+          "input": "{\"query\":\"updater confirm uptime rollback threshold supervisor\",\"limit\":5,\"model\":\"claude-haiku-5-5\"}",
+          "result_chars": 29
+        },
+        {
+          "tool": "activity_log",
+          "input": "{\"action\":\"wrote\",\"summary\":\"Wrote updateOutcome() for Cortex's updater. Searched Cortex for an existing updater spec and found none, so the 300-second confirma",
+          "result_chars": 343
+        }
+      ],
+      "answer": "```js\nfunction updateOutcome({ supervised, uptimeSec, crashed }) {\n  // Without a supervisor there is nothing to roll back to, so the update is not applied.\n  if (!supervised) return \"not-applied\";\n  // A crash in the new version means it is rolled back.\n  if (crashed) return \"rolled-back\";\n  // Healthy for long enough means confirmed. The 300-second threshold is an assumed value.\n  if (uptimeSec >= 300) return \"confirmed\";\n  // Still in the probation window.\n  return \"pending\";\n}\n```"
+    }
+  ]
+}

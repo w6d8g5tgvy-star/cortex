@@ -118,6 +118,19 @@ const tool = async (c, name, args) => {
   const s2 = await (await fetch(base + '/api/search?q=obsidian')).json();
   assert.ok(s2.some((h) => h.title === 'Written in Obsidian'));
   ok('external file edits are synced');
+  // search ranks EVERY note, then caps the results: an old note must be found even when 15 newer notes exist
+  {
+    const { Store } = require('../src/store');
+    const sv = fs.mkdtempSync(path.join(os.tmpdir(), 'cortex-search-'));
+    const st = new Store(sv);
+    st.create('note', { title: 'Updater rules', body: 'The new version confirms itself after 8 seconds of uptime under the supervisor.' });
+    await new Promise((r) => setTimeout(r, 20));
+    for (let i = 0; i < 15; i++) st.create('note', { title: `Newer note ${i}`, body: `Unrelated text number ${i}.` });
+    for (const lim of [3, 5, 10]) assert.ok(st.search('supervisor uptime confirms', { limit: lim }).some((h) => h.rec.title === 'Updater rules'), `limit ${lim} hid an older note`);
+    assert.strictEqual(st.search('unrelated text', { limit: 4 }).length, 4);
+    fs.rmSync(sv, { recursive: true, force: true });
+    ok('search limit caps results, not the notes searched (older notes stay findable)');
+  }
   srv.kill();
   fs.rmSync(vault, { recursive: true, force: true });
   console.log(`\nAll ${passed} checks passed.`);

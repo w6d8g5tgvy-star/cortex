@@ -56,7 +56,8 @@ async function hybrid(store, q, f, model) {
   if (!Object.keys(cache.items).length) return kw.slice(0, f.limit || 20);
   let qv;
   try { [qv] = await embed(model, [q]); } catch { return kw.slice(0, f.limit || 20); }
-  const allowed = new Set((f.kind ? store.list(f.kind, f) : [...store.list('note', f), ...store.list('mind', f), ...store.list('task', f), ...store.list('project', f)]).map((r) => r.id));
+  const pf = { ...f, limit: undefined }; // limit caps results, not the allowed candidates
+  const allowed = new Set((f.kind ? store.list(f.kind, pf) : [...store.list('note', pf), ...store.list('mind', pf), ...store.list('task', pf), ...store.list('project', pf)]).map((r) => r.id));
   const sem = Object.entries(cache.items).filter(([id]) => allowed.has(id)).map(([id, e]) => ({ id, s: cos(qv, e.v) })).sort((a, b) => b.s - a.s).slice(0, 40);
   const maxKw = kw[0] ? kw[0].score : 1;
   const merged = new Map();

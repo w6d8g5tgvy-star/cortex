@@ -22,6 +22,7 @@ const SNAPSHOT = flag('empty') ? null : arg('snapshot');
 const TRAINING = Number(arg('training-cost', 0));
 const CONC = Number(arg('concurrency', 4));
 const ONLY = arg('tasks') ? arg('tasks').split(',') : null;
+const TRACE = flag('trace'); // diagnostic runs only: records tool calls (never used for scored rounds)
 const OUT = arg('out', path.join(__dirname, 'rounds', `round-${ROUND}.json`));
 if (!flag('empty') && !SNAPSHOT) { console.error('--snapshot <dir> is required (or --empty)'); process.exit(2); }
 
@@ -41,14 +42,29 @@ function ask(vault, prompt) {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'train5x-cwd-'));
   return new Promise((resolve) => {
     const t0 = Date.now();
-    execFile('claude', ['-p', '--model', MODEL, '--output-format', 'json', '--setting-sources', 'project', '--no-session-persistence',
+    execFile('claude', ['-p', '--model', MODEL, '--output-format', TRACE ? 'stream-json' : 'json', ...(TRACE ? ['--verbose'] : []), '--setting-sources', 'project', '--no-session-persistence',
       '--mcp-config', cfg, '--strict-mcp-config', '--allowedTools', 'mcp__cortex__*', '--tools', '', '--max-budget-usd', '0.15', '--', prompt],
     { cwd, maxBuffer: 20 << 20, timeout: 300000, windowsHide: true }, (err, stdout) => {
       let j = {};
-      try { j = JSON.parse(stdout); } catch { j = { result: String(stdout || ''), is_error: true }; }
+      const calls = [];
+      if (TRACE) {
+        for (const line of String(stdout || '').split('\n')) {
+          let ev; try { ev = JSON.parse(line); } catch { continue; }
+          if (ev.type === 'result') j = ev;
+          const content = (ev.message && Array.isArray(ev.message.content)) ? ev.message.content : [];
+          for (const c of content) {
+            if (c.type === 'tool_use') calls.push({ tool: c.name.replace('mcp__cortex__', ''), input: JSON.stringify(c.input).slice(0, 160) });
+            if (c.type === 'tool_result' && calls.length) calls[calls.length - 1].result_chars = JSON.stringify(c.content || '').length;
+          }
+        }
+        if (!j.type) j = { result: '', is_error: true };
+      } else {
+        try { j = JSON.parse(stdout); } catch { j = { result: String(stdout || ''), is_error: true }; }
+      }
+      j.calls = calls;
       const u = j.usage || {};
       fs.rmSync(cfg, { force: true }); fs.rmSync(cwd, { recursive: true, force: true });
-      resolve({ text: String(j.result || ''), ms: Date.now() - t0, cost: Number(j.total_cost_usd || 0), turns: j.num_turns, out_tokens: Number(u.output_tokens || 0), in_tokens: Number(u.input_tokens || 0) + Number(u.cache_read_input_tokens || 0) + Number(u.cache_creation_input_tokens || 0), error: err ? String(err.message).slice(0, 200) : (j.is_error ? 'is_error' : undefined) });
+      resolve({ calls: j.calls, text: String(j.result || ''), ms: Date.now() - t0, cost: Number(j.total_cost_usd || 0), turns: j.num_turns, out_tokens: Number(u.output_tokens || 0), in_tokens: Number(u.input_tokens || 0) + Number(u.cache_read_input_tokens || 0) + Number(u.cache_creation_input_tokens || 0), error: err ? String(err.message).slice(0, 200) : (j.is_error ? 'is_error' : undefined) });
     });
   });
 }
@@ -68,7 +84,7 @@ const extract = (t) => ([...t.matchAll(/```(?:js|javascript)?\s*\n([\s\S]*?)```/
       const a = await ask(vault, PREFIX + t.prompt);
       const sc = t.score(extract(a.text));
       const pass = sc.passed === sc.total;
-      runs.push({ task: t.id, trial: i + 1, pass, passed: sc.passed, total: sc.total, failures: sc.failures, ms: a.ms, cost: a.cost, turns: a.turns, out_tokens: a.out_tokens, in_tokens: a.in_tokens, error: a.error });
+      runs.push({ task: t.id, trial: i + 1, pass, passed: sc.passed, total: sc.total, failures: sc.failures, ms: a.ms, cost: a.cost, turns: a.turns, out_tokens: a.out_tokens, in_tokens: a.in_tokens, error: a.error, ...(TRACE ? { calls: a.calls, answer: a.text.slice(0, 600) } : {}) });
       console.log(`${t.id.padEnd(8)} #${i + 1}: ${pass ? 'PASS' : 'fail'} ${sc.passed}/${sc.total} · ${(a.ms / 1000).toFixed(0)}s · $${a.cost.toFixed(4)} · ${a.turns} turns${a.error ? ' · ' + a.error : ''}`);
       fs.rmSync(vault, { recursive: true, force: true });
     }

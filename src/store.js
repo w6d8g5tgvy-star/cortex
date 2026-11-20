@@ -377,7 +377,10 @@ class Store extends EventEmitter {
     // so "deploying" finds "deployment" and partial words still hit. Results need ≥ half the words.
     const qt = [...new Set(tokenize(q))];
     if (!qt.length) return [];
-    const pool = f.kind ? this.list(f.kind, f) : [...this.list('note', f), ...this.list('mind', f), ...this.list('task', f), ...this.list('project', f)];
+    // `limit` caps the RESULTS, never the candidates: rank every matching record first.
+    // (Before 2.1.1 it was passed to list(), so a search only saw the N most recently updated notes.)
+    const pf = { ...f, limit: undefined };
+    const pool = f.kind ? this.list(f.kind, pf) : [...this.list('note', pf), ...this.list('mind', pf), ...this.list('task', pf), ...this.list('project', pf)];
     const docs = pool.map((r) => {
       const title = tokenize(r.title); const tags = tokenize(r.allTags.join(' ')); const body = tokenize(r.body);
       const tf = new Map();
