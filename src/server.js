@@ -63,6 +63,11 @@ function startServer({ store, port, host, token: cliToken }) {
   const vault = store.vault;
   const mcp = createMcp(store);
   const mcpSessions = new Map();
+  try {
+    const saved = JSON.parse(fs.readFileSync(path.join(vault, '.cortex', 'mcp-sessions.json'), 'utf8'));
+    const cutoff = Date.now() - 14 * 864e5;
+    for (const [k, s] of Object.entries(saved || {})) if (s && s.agent && Number(s.created) > cutoff) mcpSessions.set(k, s);
+  } catch { /* first start */ }
   const sse = new Set();
   const eventLoop = monitorEventLoopDelay({ resolution: 20 });
   eventLoop.enable();
@@ -228,8 +233,24 @@ function startServer({ store, port, host, token: cliToken }) {
     if (!session) session = { transport: connector ? 'connector' : 'http', local, agent: String(req.headers['x-agent-name'] || 'http-agent').slice(0, 60) };
     if (mcpSessions.size > 500) mcpSessions.delete(mcpSessions.keys().next().value);
     const out = await mcp.handle(msg, session);
+    if (isInit) saveMcpSessions();
     if (!out) { res.writeHead(202, headers); return res.end(); }
     return send(res, 200, out, headers);
+  }
+  // Remember connected apps across restarts (updates restart Cortex). Without this, an app that keeps its
+  // MCP session (claude.ai, ChatGPT) would show up as "http-agent" in activity and journals after a restart.
+  // Access still needs the connector link or a local connection; this only keeps the app's name.
+  function saveMcpSessions() {
+    clearTimeout(saveMcpSessions.t);
+    saveMcpSessions.t = setTimeout(() => {
+      try {
+        const keep = [...mcpSessions.entries()].slice(-200).filter(([, s]) => s.agent).map(([k, s]) => [k, { transport: s.transport, id: s.id, local: s.local, created: s.created, agent: s.agent }]);
+        const f = path.join(vault, '.cortex', 'mcp-sessions.json');
+        fs.writeFileSync(f + '.tmp', JSON.stringify(Object.fromEntries(keep)));
+        fs.renameSync(f + '.tmp', f);
+      } catch { /* best effort */ }
+    }, 500);
+    if (saveMcpSessions.t.unref) saveMcpSessions.t.unref();
   }
 
   // ---------- REST API ----------

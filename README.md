@@ -108,7 +108,9 @@ and finish with activity_log.
 | `memory_write` / `memory_update` / `memory_get` / `memory_delete` | Notes: with a project → `notes/<project>/`, without → system memory |
 | `memory_search` / `memory_list` / `memory_links` | Ranked search (project + system scope), lists, graph neighbours |
 | `live_update` / `live_screenshot` / `messages_check` | Report progress live, share screenshots, receive your messages |
-| `command_complete` | Report back on a command you sent from Cortex |
+| `command_complete` | Report back on a command you sent from Cortex, or answer another agent's message |
+| `agent_send` / `agent_list` | Message another AI (Claude, Codex, ChatGPT…): ask, hand off a task, share news; see who is active and the state of what you sent. Replies come back as `replies_from_agents` |
+| `ai_usage` | Tokens used by Claude Code and Codex on this computer (5 h / day / week), the Codex plan quota, and recent limit hits |
 | `mind_list` / `mind_add` / `mind_fetch` / `mind_complete` | Work through videos to watch, articles to read and articles to write |
 | `skill_list` / `skill_get` / `skill_save` | Your skills library |
 | `activity_log` / `activity_list` / `daily_briefing` | Record and review what happened |
