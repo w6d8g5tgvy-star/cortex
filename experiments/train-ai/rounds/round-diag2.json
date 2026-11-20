@@ -3,7 +3,7 @@
     "round": "diag2",
     "model": "claude-haiku-5-5",
     "trials": 1,
-    "snapshot": "C:/Users/sheri/Cortex-train/snapshot-r0",
+    "snapshot": "snapshot-r0",
     "passes": 2,
     "runs": 2,
     "pass_rate": 1,
