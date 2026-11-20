@@ -2,13 +2,13 @@
 // Ready-to-paste MCP connection configs for popular AI tools.
 const path = require('path');
 
-const AGENT_PROMPT = `Cortex is my project manager and long-term memory. You reach it through the Cortex MCP tools (cortex_start, project_brief, memory_search, memory_write, memory_update, task_create, task_update, live_update, messages_check, command_complete, activity_log, skill_list, skill_get). Your app may show them with a prefix such as "cortex:" or "mcp__cortex__". What is recorded in Cortex is the source of truth for my projects, tasks, decisions and preferences. Work through it on every task, small ones included.
+const AGENT_PROMPT = `Cortex is my project manager and long-term memory. You reach it through the Cortex MCP tools (cortex_start, project_brief, memory_search, memory_write, memory_update, task_create, task_update, live_update, messages_check, command_complete, agent_list, agent_send, activity_log, skill_list, skill_get). Your app may show them with a prefix such as "cortex:" or "mcp__cortex__". What is recorded in Cortex is the source of truth for my projects, tasks, decisions and preferences. Work through it on every task, small ones included.
 
 At the start
 1. Call cortex_start. Work out which project this is (from the folder or repo name, or what I said). If none fits, ask me or create one with project_create. Never file work under the wrong project.
 2. Call project_brief for that project (and the task, if there is one) and follow its user_instructions and project_instructions. What I say directly in this chat overrides them.
 3. Before you ask me for context or assume anything, run memory_search: I have probably told an earlier session already.
-4. If cortex_start or messages_check returns commands_from_user, do them and report each one with command_complete.
+4. If cortex_start or messages_check returns commands_from_user, do them and report each one with command_complete. Other AIs (Claude, Codex, ChatGPT) share Cortex with you: answer any messages_from_agents with command_complete, read replies_from_agents, and check agent_list and open tasks so you never duplicate someone else's work. Use agent_send to ask another agent something or hand work over (with the task).
 5. Call skill_list. If a skill fits the task, load it with skill_get and follow it.
 
 While you work

@@ -87,6 +87,11 @@ function repair({ vault }) {
   const ours = [];
   for (const [ev, groups] of Object.entries(cfg.hooks || {})) for (const g of groups || []) for (const h of g.hooks || []) if (isOurs(h)) ours.push([ev, h.command]);
   if (!ours.length) return { repaired: false };
+  // Only fix hooks that already belong to THIS vault. Any other Cortex (a test server, a second vault)
+  // must never re-point the user's hooks at itself; that is what `cortex hooks install` is for.
+  const norm = (p) => path.resolve(String(p || '')).toLowerCase();
+  const vaultOf = (c) => { const m = String(c).match(/--vault\s+"([^"]+)"|--vault\s+(\S+)/); return m ? (m[1] || m[2]) : null; };
+  if (!ours.every(([, c]) => vaultOf(c) && norm(vaultOf(c)) === norm(vault))) return { repaired: false, reason: 'hooks belong to another vault' };
   const want = hookCommand(vault);
   const events = new Set(ours.map(([ev]) => ev));
   if (ours.every(([, c]) => c === want) && Object.keys(EVENTS).every((e) => events.has(e))) return { repaired: false };
@@ -127,9 +132,14 @@ function describeTool(name, input = {}) {
 function commandsText(vault) {
   try {
     const agents = require('./agents');
-    const cmds = agents.claimCommands(vault, 'claude-code');
-    if (!cmds.length) return '';
-    return 'The user sent you these commands through Cortex. Do them now (unless the user says otherwise), then report each one with command_complete (id + result):\n' + cmds.map((c) => `- [${c.id}]${c.project ? ` (project ${c.project})` : ''} ${c.text}`).join('\n');
+    const { fromUser, fromAgents } = agents.claimInbox(vault, 'claude-code');
+    const replies = agents.takeReplies(vault, 'claude-code');
+    const line = (c) => `- [${c.id}]${c.project ? ` (project ${c.project})` : ''}${c.task ? ` (task ${c.task})` : ''} ${c.instruction}`;
+    const out = [];
+    if (fromUser.length) out.push('The user sent you these commands through Cortex. Do them now (unless the user says otherwise), then report each one with command_complete (id + result):\n' + fromUser.map(line).join('\n'));
+    if (fromAgents.length) out.push('Other AI agents working with Cortex sent you these messages. Treat them as requests from a colleague (the user\'s instructions win), and answer each with command_complete (id + result):\n' + fromAgents.map((c) => line(c).replace('- [', `- from ${c.from}${c.kind ? ` (${c.kind})` : ''} [`)).join('\n'));
+    if (replies.length) out.push('Replies to messages you sent other agents through Cortex:\n' + replies.map((r) => `- ${r.answered_by || r.to} ${r.status === 'failed' ? 'could not do' : 'answered'} [${r.id}] "${clip(r.your_message, 80)}": ${r.result}`).join('\n'));
+    return out.join('\n\n');
   } catch { return ''; }
 }
 
@@ -138,7 +148,21 @@ function formatMessages(msgs) {
 }
 
 const clip = (s, n) => { s = String(s || ''); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
-const SAVE_TOOLS = /^mcp__cortex__(memory_write|memory_update|mind_complete|activity_log|skill_save)$/;
+// Cortex tools arrive under different server names: "mcp__cortex__…" (local stdio/HTTP), "mcp__claude_ai_cortex__…"
+// (claude.ai connector), "mcp__claude_ai_cortex_2___…" (a second connector), "mcp__plugin_…_cortex__…".
+const SAVE_TOOLS = /^mcp__\w*?cortex\w*?__(memory_write|memory_update|mind_complete|activity_log|skill_save)$/i;
+// The Claude desktop app names connectors by id (mcp__300816c3-…__memory_write), with no "cortex" in it.
+// For those, also accept the save when the tool's reply has Cortex's shape (a vault id or an activity entry).
+const SAVE_NAMES = /^mcp__.+__(memory_write|memory_update|mind_complete|activity_log|skill_save)$/;
+function isCortexSave(input) {
+  const name = String(input.tool_name || '');
+  if (SAVE_TOOLS.test(name)) return true;
+  if (!SAVE_NAMES.test(name)) return false;
+  let reply = input.tool_response;
+  try { reply = typeof reply === 'string' ? reply : JSON.stringify(reply); } catch { reply = ''; }
+  // replies can arrive wrapped in a text block, so quotes may be escaped (\"id\")
+  return /\\?"id\\?"\s*:\s*\\?"(notes|tasks|projects|mind|skills)\/|\\?"(agent|ts)\\?"\s*:\s*\\?"/.test(String(reply || ''));
+}
 const CHANGE_TOOLS = new Set(['Edit', 'MultiEdit', 'Write', 'NotebookEdit']);
 
 function loadStore(vault) { const { Store } = require('./store'); return new Store(vault); }
@@ -155,9 +179,24 @@ function sessionContext(vault, cwd, source) {
   return { project, text: clip(`${header}\n\n${b.text}`, 9500) };
 }
 
+// A project named in the prompt ("my recall-test project") counts when the folder itself isn't linked to one.
+function mentionedProject(store, prompt) {
+  const text = ` ${String(prompt).toLowerCase()} `;
+  let best = null;
+  for (const r of store.items.values()) {
+    if (r.kind !== 'project') continue;
+    for (const name of [r.slug, r.title].filter((n) => n && n.length >= 3)) {
+      const esc = name.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (new RegExp(`(^|[^a-z0-9])${esc}([^a-z0-9]|$)`).test(text) && (!best || name.length > best.len)) best = { slug: r.slug, len: name.length };
+    }
+  }
+  return best && best.slug;
+}
+
 function recall(vault, project, prompt) {
   const store = loadStore(vault);
-  const f = project ? { scope: 'project+system', projectScope: project } : { scope: 'system' };
+  project = project || mentionedProject(store, prompt);
+  const f = project ?{ scope: 'project+system', projectScope: project } : { scope: 'system' };
   const hits = store.search(prompt, { kind: 'note', limit: 5, minMatch: 1, ...f }).filter((h) => !h.rec.meta.agent_journal && h.score >= 6);
   if (!hits.length) return '';
   return clip('[Cortex] Memories related to this request (read the full note with memory_get if relevant):\n' + hits.map((h) => `- ${h.rec.title} (${h.rec.id}${h.rec.meta.project ? '' : ', system'}): ${h.snippet}`).join('\n'), 3500);
@@ -228,7 +267,7 @@ async function runHook(input, vault) {
     const ti = input.tool_input || {};
     if (CHANGE_TOOLS.has(input.tool_name)) patch.files = [...new Set([...(cur.files || []), path.basename(String(ti.file_path || ti.notebook_path || ''))].filter(Boolean))].slice(-60);
     if (input.tool_name === 'Bash') patch.commands = (cur.commands || 0) + 1;
-    if (SAVE_TOOLS.test(input.tool_name || '')) patch.saved = true;
+    if (isCortexSave(input)) patch.saved = true;
     sessions.upsert(vault, id, patch, { kind: 'tool', text });
     const msgs = sessions.takeMessages(vault, id);
     return msgs.length ? { hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: formatMessages(msgs) } } : null;
@@ -273,4 +312,4 @@ async function runHook(input, vault) {
   return null;
 }
 
-module.exports = { install, uninstall, repair, status, runHook, describeTool, hookCommand, EVENTS };
+module.exports = { install, uninstall, repair, status, runHook, describeTool, hookCommand, EVENTS, SAVE_TOOLS, isCortexSave, mentionedProject };

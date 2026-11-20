@@ -20,11 +20,12 @@ const readJson = (f) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); }
 function writeAtomic(f, obj) { const tmp = `${f}.${process.pid}.tmp`; fs.writeFileSync(tmp, JSON.stringify(obj, null, 2)); fs.renameSync(tmp, f); }
 
 // ---------------- command queue ----------------
-function createCommand(vault, { text, target, project, from }) {
+// `kind` and `task`/`replyTo` are set when one agent messages another (agent_send): request, handoff or info.
+function createCommand(vault, { text, target, project, from, kind, task, replyTo }) {
   text = String(text || '').trim();
   if (!text) throw new Error('The instruction is empty');
   fs.mkdirSync(cmdDir(vault), { recursive: true });
-  const cmd = { id: 'cmd-' + crypto.randomBytes(5).toString('hex'), ts: now(), target: String(target || 'any').trim() || 'any', text: text.slice(0, 8000), project: project || undefined, from: from || 'you', status: 'pending' };
+  const cmd = { id: 'cmd-' + crypto.randomBytes(5).toString('hex'), ts: now(), target: String(target || 'any').trim() || 'any', text: text.slice(0, 8000), project: project || undefined, from: from || 'you', kind: kind || undefined, task: task || undefined, replyTo: replyTo || undefined, status: 'pending' };
   writeAtomic(path.join(cmdDir(vault), cmd.id + '.json'), cmd);
   return cmd;
 }
@@ -57,6 +58,7 @@ function claimCommands(vault, agent, max = 5) {
   for (const c of listCommands(vault).reverse()) {
     if (out.length >= max) break;
     if (c.status !== 'pending' || !matches(c.target, agent)) continue;
+    if (String(c.from || '').toLowerCase() === String(agent || '').toLowerCase()) continue; // never deliver an agent its own message
     try { fs.closeSync(fs.openSync(path.join(cmdDir(vault), c.id + '.claim'), 'wx')); } catch { continue; }
     const taken = { ...c, status: 'taken', takenBy: agent, takenAt: now() };
     writeAtomic(path.join(cmdDir(vault), c.id + '.json'), taken);
@@ -80,7 +82,61 @@ function deleteCommand(vault, id) {
   fs.rmSync(base + '.claim', { force: true });
 }
 
-const commandView = (c) => ({ id: c.id, instruction: c.text, project: c.project, from: c.from, sent: c.ts });
+const fromUser = (c) => /^you\b/i.test(String(c.from || 'you'));
+const commandView = (c) => ({ id: c.id, instruction: c.text, project: c.project, from: c.from, sent: c.ts, ...(c.kind ? { kind: c.kind } : {}), ...(c.task ? { task: c.task } : {}), ...(c.replyTo ? { reply_to: c.replyTo } : {}) });
+
+/** Claim waiting commands and split them: from the user (dashboard/phone) vs from other agents (agent_send). */
+function claimInbox(vault, agent, max = 5) {
+  const all = claimCommands(vault, agent, max);
+  return { fromUser: all.filter(fromUser).map(commandView), fromAgents: all.filter((c) => !fromUser(c)).map(commandView) };
+}
+
+/**
+ * Results of messages this agent sent to other agents that have since been completed. Each reply is
+ * delivered once (marked replyDelivered), so the sender learns the outcome without polling the dashboard.
+ */
+function takeReplies(vault, agent, max = 10) {
+  const me = String(agent || '').toLowerCase();
+  const out = [];
+  for (const c of listCommands(vault, { limit: 500 }).reverse()) {
+    if (out.length >= max) break;
+    if (String(c.from || '').toLowerCase() !== me || c.replyDelivered || !['done', 'failed'].includes(c.status)) continue;
+    writeAtomic(path.join(cmdDir(vault), c.id + '.json'), { ...c, replyDelivered: now() });
+    out.push({ id: c.id, to: c.target, answered_by: c.takenBy, status: c.status, your_message: c.text.slice(0, 300), result: c.result, task: c.task, finished: c.doneAt });
+  }
+  return out;
+}
+
+/** Messages this agent sent and their state (pending, taken, done, failed). */
+function sentBy(vault, agent, limit = 20) {
+  const me = String(agent || '').toLowerCase();
+  return listCommands(vault, { limit: 500 }).filter((c) => String(c.from || '').toLowerCase() === me).slice(0, limit)
+    .map((c) => ({ id: c.id, to: c.target, kind: c.kind, status: c.status, taken_by: c.takenBy, message: c.text.slice(0, 200), result: c.result, sent: c.ts }));
+}
+
+/**
+ * Who else is working with Cortex: agents seen in live sessions and the activity log, newest first,
+ * with their family (so "claude" / "openai" targets are obvious), last project and current step.
+ */
+function peers(store, { hours = 72, self } = {}) {
+  const since = Date.now() - hours * 3600e3;
+  const byName = new Map();
+  const see = (name, ts, extra = {}) => {
+    if (!name || /^you\b/i.test(name) || name === 'cortex') return;
+    const t = Date.parse(ts) || 0;
+    if (t < since) return;
+    const p = byName.get(name) || { agent: name, family: family(name), last_seen: ts, actions: 0 };
+    if (t >= (Date.parse(p.last_seen) || 0)) { p.last_seen = ts; Object.assign(p, extra); }
+    byName.set(name, p);
+    return p;
+  };
+  for (const a of store.recentActivity({ limit: 400 }) || []) { const p = see(a.agent, a.ts, a.project ? { project: a.project } : {}); if (p) p.actions++; }
+  for (const s of sessions.list(store.vault) || []) {
+    see(s.agent, s.updated || s.started, { live: s.status, step: s.step, project: s.project || undefined, session: s.id });
+  }
+  return [...byName.values()].map((p) => ({ ...p, you: self && p.agent.toLowerCase() === String(self).toLowerCase() ? true : undefined }))
+    .sort((a, b) => (a.last_seen < b.last_seen ? 1 : -1));
+}
 
 // ---------------- launcher ----------------
 const which = (bin) => new Promise((res) => execFile(process.platform === 'win32' ? 'where' : 'which', [bin], (e, out) => res(e ? null : String(out).split(/\r?\n/)[0].trim() || null)));
@@ -185,9 +241,10 @@ class AgentRunner {
 
   running() { return [...this.procs.keys()]; }
 
-  launch({ tool = 'claude', prompt, cwd, permission = 'acceptEdits', maxMinutes = 120, project, task, resume, continues, from }) {
+  launch({ tool = 'claude', prompt, cwd, permission = 'acceptEdits', maxMinutes = 120, project, task, resume, continues, from, model }) {
     const t = TOOLS[tool];
     if (!t) throw new Error(`Unknown agent tool "${tool}"`);
+    model = cleanModel(model);
     prompt = String(prompt || '').trim();
     if (!prompt && !task) throw new Error('Tell the agent what to do');
     if (resume && tool !== 'claude') throw new Error('Only Claude Code runs can be continued');
@@ -202,16 +259,18 @@ class AgentRunner {
     let args;
     if (tool === 'claude') {
       // Documented pattern: piped stdin is the material, the -p argument is the instruction (fixed text, never user input).
-      args = ['-p', 'Follow the Cortex brief and assignment provided on stdin.', '--output-format', 'stream-json', '--verbose', '--allowedTools', 'mcp__cortex__*'];
+      args = ['-p', 'Follow the Cortex brief and assignment provided on stdin.', '--output-format', 'stream-json', '--verbose', '--allowedTools', 'mcp__cortex__*', 'mcp__claude_ai_cortex'];
       if (resume) args.push('--resume', String(resume).replace(/[^\w-]/g, ''));
       if (['default', 'acceptEdits', 'plan', 'bypassPermissions'].includes(permission)) args.push('--permission-mode', permission);
+      if (model) args.push('--model', model);
     } else {
       args = ['exec', '--skip-git-repo-check', '--json'];
       if (permission === 'acceptEdits') args.push('--full-auto');
       if (permission === 'bypassPermissions') args.push('--dangerously-bypass-approvals-and-sandbox');
+      if (model) args.push('-m', model);
       args.push('-');
     }
-    sessions.upsert(this.vault, id, { agent: t.agent, title, status: 'working', step: `Starting ${t.label}…`, cwd, workspace: path.basename(cwd), launched: true, tool, permission, project: b.project, task: b.task, prompt: prompt.slice(0, 4000), continues, from }, { kind: 'prompt', text: `▶ ${(prompt || title).slice(0, 400)}` });
+    sessions.upsert(this.vault, id, { agent: t.agent, title, status: 'working', step: `Starting ${t.label}${model ? ` (${model})` : ''}…`, cwd, workspace: path.basename(cwd), launched: true, tool, permission, project: b.project, task: b.task, prompt: prompt.slice(0, 4000), continues, from, ...(model ? { model } : {}) }, { kind: 'prompt', text: `▶ ${(prompt || title).slice(0, 400)}` });
     if (taskRec && taskRec.meta.status !== 'done') this.store.update(taskRec.id, { status: 'doing', assignee: t.agent });
     const win = process.platform === 'win32';
     // The prompt goes through stdin, never through a shell command line.
@@ -332,4 +391,21 @@ function folderAllowed(dir, allowed) {
   });
 }
 
-module.exports = { family, createCommand, listCommands, claimCommands, completeCommand, deleteCommand, commandView, AgentRunner, folderAllowed, TOOLS };
+// Model choice for launched agents. Claude Code accepts aliases (opus, sonnet, haiku) or full model names via --model;
+// Codex accepts its model names via -m. Only plain model-name characters are passed on (no spaces, no flags).
+const MODELS = { claude: ['opus', 'sonnet', 'haiku'], codex: [] };
+function cleanModel(m) {
+  const s = String(m || '').trim();
+  if (!s || /^(default|auto)$/i.test(s)) return undefined;
+  if (!/^[A-Za-z0-9][\w.:\-[\]]{0,79}$/.test(s)) throw new Error(`"${s}" doesn't look like a model name (letters, numbers, . - _ : only)`);
+  return s;
+}
+// What a run should use: explicit choice first, then the project's defaults (model only if the agent matches).
+function pickAgent(projectMeta, tool, model) {
+  const pm = projectMeta || {};
+  const t = tool || pm.agent_tool || 'claude';
+  const m = model !== undefined && String(model).trim() !== '' ? model : ((pm.agent_tool || 'claude') === t ? pm.agent_model : undefined);
+  return { tool: t, model: cleanModel(m) };
+}
+
+module.exports = { MODELS, cleanModel, pickAgent, family, createCommand, listCommands, claimCommands, claimInbox, takeReplies, sentBy, peers, completeCommand, deleteCommand, commandView, AgentRunner, folderAllowed, TOOLS };

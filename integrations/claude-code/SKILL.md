@@ -20,6 +20,14 @@ The user runs Cortex, a local dashboard that is their project manager and long-t
   - Use `capture_screen: true` to share the computer screen. This only works if the user has enabled screen sharing.
 - Keep the board current with `task_create` and `task_update`.
 
+## Working with other AIs
+Other agents (Codex, ChatGPT, other Claude apps) share this Cortex.
+- `agent_list` shows who is active and what they are doing. Check it, and the open tasks, so you never duplicate someone's work.
+- `agent_send` asks another agent something or hands work over (`kind: "handoff"` with a `task` assigns it to them). Make the message self-contained: they can't see your conversation.
+- `messages_from_agents` are requests from a colleague. The user's instructions win. Answer each one with `command_complete`.
+- Answers to what you sent arrive as `replies_from_agents`.
+- `ai_usage` shows token use and quota. If you are close to a limit, hand the rest to another agent before you stop.
+
 ## When you finish
 - Call `live_update` with `status: "done"` and a one-line summary. Use `status: "needs-you"` if you are blocked waiting for the user.
 - Save durable knowledge with `memory_write`: decisions, user preferences, gotchas and how-tos. Link related notes with `[[Note Title]]`.

@@ -22,6 +22,8 @@ const base = `http://127.0.0.1:${port}`;
 const ENV = { ...process.env, HOME: home, USERPROFILE: home, CORTEX_ALLOW_PRIVATE_FETCH: '1', CORTEX_OLLAMA: 'http://127.0.0.1:1' };
 delete ENV.CORTEX_RUN_ID;
 delete ENV.CORTEX_SUPERVISED;
+delete ENV.CLAUDE_CONFIG_DIR; // usage logs must come from the test home, not the real one
+delete ENV.CODEX_HOME;
 let passed = 0;
 const ok = (n) => { passed++; console.log('  ✓', n); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -220,6 +222,55 @@ out({type:'result',subtype:'success',is_error:false,result:'Fixed the login bug 
   c2.close();
   ok('a command goes to exactly one agent and its result comes back');
 
+  // agent to agent: Codex hands a task to Claude, Claude answers, Codex gets the reply exactly once
+  const codexA = mcp('codex-mcp-client');
+  const claudeA = mcp('claude-code');
+  await codexA.ready; await claudeA.ready;
+  const st0 = await codexA.tool('cortex_start', {});
+  assert.equal(st0.cortex_version, require('../package.json').version);
+  assert.equal(st0.you_are, 'codex-mcp-client');
+  const peersSeen = await codexA.tool('agent_list', {});
+  assert.ok(peersSeen.agents.some((p) => p.agent === 'claude-code' && p.family === 'claude'));
+  await assert.rejects(() => codexA.tool('agent_send', { to: 'codex-mcp-client', message: 'hi me' }), /That is you/);
+  const sent = await codexA.tool('agent_send', { to: 'claude', kind: 'handoff', task: task.id, message: 'Please review the login fix and add a regression test.' });
+  assert.ok(/^cmd-/.test(sent.id));
+  const selfCheck = await codexA.tool('messages_check');
+  assert.ok(!selfCheck.messages_from_agents.some((m) => m.id === sent.id) && !selfCheck.commands_from_user.some((m) => m.id === sent.id));
+  const clIn = await claudeA.tool('messages_check');
+  const got = clIn.messages_from_agents.find((m) => m.id === sent.id);
+  assert.ok(got && got.from === 'codex-mcp-client' && got.kind === 'handoff' && got.task === task.id);
+  assert.ok(!clIn.commands_from_user.some((m) => m.id === sent.id));
+  let taskNow = await claudeA.tool('task_get', { id: task.id });
+  assert.equal(taskNow.assignee, 'claude');
+  assert.ok(taskNow.body.includes('codex-mcp-client → claude (handoff'));
+  await claudeA.tool('command_complete', { id: sent.id, result: 'Reviewed; added test/login.spec.js.' });
+  const rep = await codexA.tool('live_update', { step: 'waiting for Claude' });
+  assert.ok(rep.replies_from_agents.some((r) => r.id === sent.id && r.answered_by === 'claude-code' && r.result.includes('login.spec')));
+  assert.equal((await codexA.tool('messages_check')).replies_from_agents.length, 0);
+  taskNow = await claudeA.tool('task_get', { id: task.id });
+  assert.ok(taskNow.body.includes('claude-code → codex-mcp-client (reply to ' + sent.id));
+  const sentList = (await codexA.tool('agent_list', {})).messages_you_sent;
+  assert.equal(sentList.find((m) => m.id === sent.id).status, 'done');
+  // account-wide AI usage from the tools' own logs (fake Claude Code + Codex logs in the test home)
+  const nowIso = new Date().toISOString();
+  const cpDir = path.join(home, '.claude', 'projects', 'proj');
+  fs.mkdirSync(cpDir, { recursive: true });
+  fs.writeFileSync(path.join(cpDir, 's.jsonl'), [1, 1, 2].map((k) => JSON.stringify({ type: 'assistant', timestamp: nowIso, requestId: 'r' + k, message: { id: 'm' + k, model: 'claude-x', usage: { input_tokens: 100, output_tokens: 50, cache_read_input_tokens: 1000, cache_creation_input_tokens: 0 } } })).join('\n'));
+  const cxDir = path.join(home, '.codex', 'sessions', '2026', '11', '19');
+  fs.mkdirSync(cxDir, { recursive: true });
+  const resets = Math.floor(Date.now() / 1000) + 3600;
+  fs.writeFileSync(path.join(cxDir, 'rollout-a.jsonl'), JSON.stringify({ timestamp: nowIso, payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 500, cached_input_tokens: 200, output_tokens: 40 } }, rate_limits: { plan_type: 'plus', primary: { used_percent: 42, window_minutes: 300, resets_at: resets } } } }));
+  const usageApi = await J(await fetch(base + '/api/usage'));
+  assert.equal(usageApi.claude.windows.h5.total, 2300); // duplicate content-block line counted once
+  assert.equal(usageApi.codex.windows.h5.total, 540);
+  assert.equal(usageApi.codex.limits.primary.usedPercent, 42);
+  const usageTool = await codexA.tool('ai_usage');
+  assert.ok(usageTool.claude_code.tokens_5h === 2300 && usageTool.codex.quota.plan === 'plus');
+  assert.deepEqual(require('../src/usage').limitNotices([{ status: 'error', agent: 'claude-code', step: "You've hit your 5-hour limit · resets 4:10pm", updated: nowIso }]).length, 1);
+  ok('AI usage: token totals from Claude Code and Codex logs, Codex quota, and limit hits (dashboard + ai_usage tool)');
+  codexA.close(); claudeA.close();
+  ok('agents message each other: handoff reaches the right agent (not the sender), assigns the task, and the reply comes back once');
+
   console.log('mind');
   const blocked = await J(await post('/api/mind', { url: 'http://127.0.0.1:1/x', section: 'read' }));
   const art = await J(await post('/api/mind', { url: siteUrl + '/article' }));
@@ -333,6 +384,10 @@ out({type:'result',subtype:'success',is_error:false,result:'Fixed the login bug 
   const cHook = await J(await post('/api/commands', { text: 'Do this at session start', target: 'claude' }));
   const ssCmd = hook({ hook_event_name: 'SessionStart', session_id: 'cmd-sess', cwd: codeA, source: 'startup' });
   assert.ok(ssCmd.hookSpecificOutput.additionalContext.includes(cHook.id) && ssCmd.hookSpecificOutput.additionalContext.includes('Do this at session start'));
+  // ...and so do messages from other agents, labelled as coming from that agent rather than the user
+  const aMsg = await c.tool('agent_send', { to: 'claude-code', message: 'Which port does the dev server use?' });
+  const ssAg = hook({ hook_event_name: 'SessionStart', session_id: 'cmd-sess2', cwd: codeA, source: 'startup' }).hookSpecificOutput.additionalContext;
+  assert.ok(ssAg.includes('Other AI agents') && ssAg.includes('from codex (request) [' + aMsg.id + ']') && ssAg.includes('dev server'));
   // "Run now" starts Claude Code on a waiting command
   const cRun = await J(await post('/api/commands', { text: 'Run me now please', target: 'any', project: 'alpha-app' }));
   const runNow = await J(await post('/api/commands/run', { id: cRun.id }));

@@ -446,7 +446,8 @@ function startServer({ store, port, host, token: cliToken }) {
         const folder = s.folders[0];
         if (!folder) return send(res, 400, { error: 'Add at least one allowed folder in Settings → Agent control.' });
         store.update(item.id, { status: 'processing' });
-        return send(res, 201, runner.launch({ tool: b.tool || 'claude', prompt: ask, cwd: folder, permission: 'default', maxMinutes: 30, project: item.meta.project, from: agent }));
+        const pick = agents.pickAgent(item.meta.project ? (store.get('projects/' + item.meta.project) || {}).meta : null, b.tool, b.model);
+        return send(res, 201, runner.launch({ ...pick, prompt: ask, cwd: folder, permission: 'default', maxMinutes: 30, project: item.meta.project, from: agent }));
       }
       const c = agents.createCommand(vault, { text: ask, target: b.target || 'any', project: item.meta.project, from: agent });
       return send(res, 201, { command: c });
@@ -461,6 +462,7 @@ function startServer({ store, port, host, token: cliToken }) {
       return send(res, 200, { enabled: s.enabled, folders: s.folders, permission: s.permission, available, running: runner.running(), commands: agents.listCommands(vault, { limit: 60 }), agents: real, projectFolders, vault, local,
         ready: { enabled: s.enabled, folders: s.folders.length > 0, tool: Object.values(available).some((x) => x.installed) } });
     }
+    if (p === '/api/usage' && m === 'GET') return send(res, 200, require('./usage').report(sessions.list(vault)));
     if (p === '/api/agents/check' && m === 'POST') {
       const b = await json();
       const r = await runner.check(b.tool || 'claude');
@@ -477,7 +479,7 @@ function startServer({ store, port, host, token: cliToken }) {
       const proj = cmd.project ? store.get('projects/' + cmd.project) : null;
       const cwd = (proj && proj.meta.folder && agents.folderAllowed(proj.meta.folder, s.folders) && proj.meta.folder) || s.folders[0];
       if (!agents.folderAllowed(cwd, s.folders)) return send(res, 400, { error: 'Add an allowed folder first (Agents → Start an agent).' });
-      const r = runner.launch({ tool: b.tool || 'claude', prompt: `${cmd.text}\n\n(This is Cortex command ${cmd.id}. When finished, call command_complete with id "${cmd.id}" and the result.)`, cwd, permission: s.permission, maxMinutes: s.maxMinutes, project: cmd.project, from: agent });
+      const r = runner.launch({ ...agents.pickAgent(proj && proj.meta, b.tool, b.model), prompt: `${cmd.text}\n\n(This is Cortex command ${cmd.id}. When finished, call command_complete with id "${cmd.id}" and the result.)`, cwd, permission: s.permission, maxMinutes: s.maxMinutes, project: cmd.project, from: agent });
       try { const f = path.join(vault, '.cortex', 'commands', cmd.id + '.json'); fs.writeFileSync(f, JSON.stringify({ ...cmd, status: 'taken', takenBy: `Claude Code run ${r.id}`, takenAt: new Date().toISOString() })); fs.closeSync(fs.openSync(f.replace(/\.json$/, '.claim'), 'a')); } catch { /* best effort */ }
       broadcast({ type: 'live' });
       return send(res, 201, r);
@@ -501,8 +503,10 @@ function startServer({ store, port, host, token: cliToken }) {
         if (!prev || !prev.claude_session) return send(res, 400, { error: 'This chat cannot be continued (it was not started by Cortex with Claude Code).' });
         resume = prev.claude_session; project = project || prev.project; task = task || prev.task;
       }
-      const r = runner.launch({ tool: b.tool || 'claude', prompt: b.prompt, cwd, permission: s.permission, maxMinutes: s.maxMinutes, project, task, resume, continues: b.resumeFrom, from: agent });
-      store.log({ agent, action: 'agent.start', summary: `Started ${b.tool === 'codex' ? 'Codex' : 'Claude Code'}: ${String(b.prompt || task || '').slice(0, 120)}`, project, ref: task });
+      let pick;
+      try { pick = agents.pickAgent(proj && proj.meta, b.tool, b.model); } catch (e) { return send(res, 400, { error: e.message }); }
+      const r = runner.launch({ ...pick, prompt: b.prompt, cwd, permission: s.permission, maxMinutes: s.maxMinutes, project, task, resume, continues: b.resumeFrom, from: agent });
+      store.log({ agent, action: 'agent.start', summary: `Started ${pick.tool === 'codex' ? 'Codex' : 'Claude Code'}${pick.model ? ` (${pick.model})` : ''}: ${String(b.prompt || task || '').slice(0, 120)}`, project, ref: task });
       broadcast({ type: 'live' });
       return send(res, 201, r);
     }

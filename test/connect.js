@@ -73,10 +73,51 @@ const ok = (m) => console.log('  ✓ ' + m);
 
   const { AGENT_PROMPT } = require(path.join(ROOT, 'src', 'snippets.js'));
   const mcpSrc = fs.readFileSync(path.join(ROOT, 'src', 'mcp.js'), 'utf8');
-  const fields = ['user_instructions', 'project_instructions', 'commands_from_user', 'messages_from_user'];
+  const fields = ['user_instructions', 'project_instructions', 'commands_from_user', 'messages_from_user', 'messages_from_agents', 'replies_from_agents'];
   const named = [...new Set(AGENT_PROMPT.match(/\b[a-z]+_[a-z_]+\b/g))].filter((n) => !fields.includes(n) && !n.startsWith('mcp__'));
   assert.deepEqual(named.filter((n) => !mcpSrc.includes(`name: '${n}'`)), []);
   ok(`agent prompt names ${named.length} tools, all of which exist`);
+
+  // a Cortex server for ANOTHER vault (tests, a second vault) must never re-point the user's hooks
+  const other = fs.mkdtempSync(path.join(os.tmpdir(), 'cortex-connect-other-'));
+  const hijack = `
+    const h = require(${JSON.stringify(path.join(ROOT, 'src', 'claude-hooks.js'))});
+    console.log(JSON.stringify(h.repair({ vault: ${JSON.stringify(other)} })));`;
+  const hj = JSON.parse(execFileSync(process.execPath, ['-e', hijack], { env: { ...process.env, USERPROFILE: home, HOME: home } }).toString().trim().split('\n').pop());
+  const after = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'));
+  assert.equal(hj.repaired, false);
+  assert.ok(Object.values(after.hooks).flat().flatMap((g) => g.hooks).filter((x) => x.command.includes('cortex.js" hook')).every((x) => x.command.includes(vault)), 'hooks still point at the original vault');
+  ok('a Cortex for another vault cannot re-point the hooks');
+
+  // the save gate must recognise Cortex tools under every server name (claude.ai connector included)
+  const { SAVE_TOOLS, mentionedProject } = require(path.join(ROOT, 'src', 'claude-hooks.js'));
+  for (const n of ['mcp__cortex__memory_write', 'mcp__claude_ai_cortex__memory_write', 'mcp__claude_ai_cortex__memory_update', 'mcp__claude_ai_cortex_2___activity_log']) assert.ok(SAVE_TOOLS.test(n), n);
+  for (const n of ['mcp__cortex__memory_search', 'mcp__notion__memory_write', 'Write']) assert.ok(!SAVE_TOOLS.test(n), n);
+  const { isCortexSave } = require(path.join(ROOT, 'src', 'claude-hooks.js'));
+  const desktopName = 'mcp__300816c3-9096-462a-8412-01982c4ed8d4__memory_write';
+  assert.ok(isCortexSave({ tool_name: desktopName, tool_response: [{ type: 'text', text: '{"id":"notes/cortex/x","title":"x"}' }] }), 'desktop connector save (id-named server)');
+  assert.ok(isCortexSave({ tool_name: 'mcp__300816c3-9096__activity_log', tool_response: '{"ts":"2026-11-20T01:38:49Z","agent":"AnthropicClaudeAI"}' }), 'desktop activity_log');
+  assert.ok(!isCortexSave({ tool_name: 'mcp__memster__memory_write', tool_response: '{"ok":true,"engram":"e1"}' }), 'another memory server is not Cortex');
+  ok('save gate counts Cortex saves from local, claude.ai and desktop (id-named) connectors only');
+
+  // recall finds a project named in the prompt when the folder isn't linked to a project
+  const fakeStore = { items: new Map([['projects/recall-test', { kind: 'project', slug: 'recall-test', title: 'recall-test' }], ['projects/shop', { kind: 'project', slug: 'shop', title: 'Shop' }]]) };
+  assert.equal(mentionedProject(fakeStore, "what's the codename in my recall-test project?"), 'recall-test');
+  assert.equal(mentionedProject(fakeStore, 'Fix the Shop checkout'), 'shop');
+  assert.equal(mentionedProject(fakeStore, 'workshop notes please'), null);
+  ok('recall picks up a project named in the prompt (whole words only)');
+
+  // model choice: explicit pick wins, project default applies only to its own agent, bad names are refused
+  const { pickAgent, cleanModel } = require(path.join(ROOT, 'src', 'agents.js'));
+  assert.deepEqual(pickAgent(null, undefined, undefined), { tool: 'claude', model: undefined });
+  assert.deepEqual(pickAgent({ agent_tool: 'codex', agent_model: 'gpt-5-codex' }, undefined, ''), { tool: 'codex', model: 'gpt-5-codex' });
+  assert.deepEqual(pickAgent({ agent_model: 'sonnet' }, 'claude', undefined), { tool: 'claude', model: 'sonnet' });
+  assert.deepEqual(pickAgent({ agent_model: 'sonnet' }, 'codex', undefined), { tool: 'codex', model: undefined });
+  assert.deepEqual(pickAgent({ agent_model: 'sonnet' }, 'claude', 'haiku'), { tool: 'claude', model: 'haiku' });
+  assert.equal(cleanModel('default'), undefined);
+  assert.throws(() => cleanModel('opus --dangerously-skip-permissions'));
+  assert.throws(() => cleanModel('-p'));
+  ok('model choice: explicit pick wins, project default applies to its own agent, unsafe names refused');
 
   console.log('\nAll connection checks passed.');
 })().catch((e) => { console.error('FAILED:', e); process.exit(1); });

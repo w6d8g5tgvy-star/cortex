@@ -29,6 +29,8 @@ const STATUS_COLOR = Object.fromEntries(STATUSES.map(([k, , c]) => [k, c]));
 const PRIOS = ['urgent', 'high', 'medium', 'low'];
 const TYPES = ['memory', 'note', 'decision', 'plan', 'log', 'reference', 'idea'];
 const PROJECT_STATUSES = ['active', 'paused', 'done', 'archived'];
+// Model suggestions per agent (free text is allowed too). Claude Code aliases always point at the latest model.
+const AGENT_MODELS = { claude: ['opus', 'sonnet', 'haiku'], codex: [] };
 const PALETTE = ['#8b7cf6', '#4f9cf9', '#3fc5d6', '#3ecf8e', '#f5b84b', '#f2676b', '#ec6fcf', '#a3e635'];
 const NAV = [
   ['home', 'Home', 'i-home', 'Workspace'], ['projects', 'Projects', 'i-projects'], ['board', 'Board', 'i-board'],
@@ -361,6 +363,9 @@ async function projectModal(id) {
       <input class="input" id="m-desc" placeholder="One-line description" value="${esc(p?.description || '')}">
       ${p ? '' : `<div class="field"><label>Start from a template</label><select class="input" id="m-tpl"><option value="">Blank project</option>${(S.templates || []).map((t) => `<option value="${esc(t.id)}">${esc(t.name)}: ${esc(t.description)}</option>`).join('')}</select></div>`}
       <div class="field"><label>Agent instructions: every agent working on this project follows these</label><textarea class="input" id="m-ins" rows="4" placeholder="e.g. Always run the tests. Never change the database schema without asking.">${esc(p?.instructions || '')}</textarea></div>
+      <div class="grid2"><div class="field"><label>Default agent for this project</label><select class="input" id="m-agent"><option value="">Claude Code (default)</option><option value="claude" ${p?.agent_tool === 'claude' ? 'selected' : ''}>Claude Code</option><option value="codex" ${p?.agent_tool === 'codex' ? 'selected' : ''}>Codex</option></select></div>
+        <div class="field"><label>Default model (optional)</label><input class="input" id="m-model" list="m-models" autocomplete="off" placeholder="e.g. sonnet" value="${esc(p?.agent_model || '')}"><datalist id="m-models">${AGENT_MODELS.claude.map((mm) => `<option value="${mm}">`).join('')}</datalist></div></div>
+      <span class="small muted" style="display:block;margin:-4px 0 8px">Agents started from Cortex for this project use these unless you pick something else when starting one.</span>
       <div class="field"><label>Code folder on this computer (optional)</label><input class="input" id="m-folder" placeholder="C:\\Users\\you\\Desktop\\My Project" value="${esc(p?.folder || '')}"><span class="small muted">Claude Code sessions in this folder are filed under this project automatically.</span></div>
       <div class="field"><label>Color</label><div class="row" id="m-colors">${PALETTE.map((c) => `<button type="button" data-c="${c}" style="width:26px;height:26px;border-radius:8px;border:2px solid ${c === color ? 'var(--text)' : 'transparent'};background:${c};cursor:pointer"></button>`).join('')}</div></div>
       <div class="field"><label>Overview (Markdown)</label><textarea class="input" id="m-body" rows="7" placeholder="Goals, context, links to notes with [[wikilinks]]…">${esc(p?.body || '')}</textarea></div>
@@ -370,12 +375,16 @@ async function projectModal(id) {
     $$('#m-colors button', root).forEach((b) => (b.onclick = () => { color = b.dataset.c; $$('#m-colors button', root).forEach((x) => (x.style.borderColor = x.dataset.c === color ? 'var(--text)' : 'transparent')); }));
     $('#m-title', root).focus();
     $('#m-save', root).onclick = async () => {
-      const body = { title: $('#m-title', root).value, description: $('#m-desc', root).value, color, body: $('#m-body', root).value, instructions: $('#m-ins', root).value, folder: $('#m-folder', root).value.trim() || null };
+      const body = { title: $('#m-title', root).value, description: $('#m-desc', root).value, color, body: $('#m-body', root).value, instructions: $('#m-ins', root).value, folder: $('#m-folder', root).value.trim() || null, agent_tool: $('#m-agent', root).value || null, agent_model: $('#m-model', root).value.trim() || null };
       try {
         const tpl = !p && $('#m-tpl', root) ? $('#m-tpl', root).value : '';
         if (p) await api('/api/items', { method: 'PATCH', body: { id: p.id, ...body } });
-        else if (tpl) { const r = await api('/api/templates', { method: 'POST', body: { template: tpl, title: body.title, description: body.description || undefined, folder: body.folder || undefined } }); go('projects/' + r.slug); }
-        else { const r = await api('/api/items', { method: 'POST', body: { kind: 'project', ...body, folder: body.folder || undefined } }); go('projects/' + r.slug); }
+        else if (tpl) {
+          const r = await api('/api/templates', { method: 'POST', body: { template: tpl, title: body.title, description: body.description || undefined, folder: body.folder || undefined } });
+          if (body.agent_tool || body.agent_model) await api('/api/items', { method: 'PATCH', body: { id: 'projects/' + r.slug, agent_tool: body.agent_tool, agent_model: body.agent_model, quiet: true } });
+          go('projects/' + r.slug);
+        }
+        else { const r = await api('/api/items', { method: 'POST', body: { kind: 'project', ...body, folder: body.folder || undefined, agent_tool: body.agent_tool || undefined, agent_model: body.agent_model || undefined } }); go('projects/' + r.slug); }
         closeModal(); refresh();
       } catch (e) { fail(e); }
     };
@@ -1085,12 +1094,42 @@ function agentUsageHtml() {
   });
   return usageRows.map(([tool, total]) => `<div class="row"><b>${tool}</b><span>${total}</span></div>`).join('');
 }
+// Account-wide usage read from Claude Code / Codex logs on this computer (/api/usage), with quota meters.
+function accountUsageHtml(u) {
+  if (!u) return '<div class="small muted">Usage from this computer\'s Claude Code and Codex logs is loading…</div>';
+  const fmt = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n || 0));
+  const when = (iso) => { if (!iso) return ''; const d = new Date(iso); return d.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }); };
+  const meter = (label, w) => {
+    if (!w) return '';
+    const pct = Math.round(w.usedPercent);
+    const col = pct >= 90 ? 'var(--bad, #ff6b6b)' : pct >= 70 ? 'var(--warn, #ffc35c)' : 'var(--accent, #4f9cf9)';
+    return `<div class="small" style="margin-top:6px">${esc(label)}: <b>${pct}%</b> used${w.resetsAt ? ` · resets ${esc(when(w.resetsAt))}` : ''}${w.resetSinceCheck ? ' (reset since last check)' : ''}
+      <div style="height:6px;border-radius:4px;background:rgba(255,255,255,.08);margin-top:3px"><div style="height:6px;border-radius:4px;width:${Math.max(2, pct)}%;background:${col}"></div></div></div>`;
+  };
+  const win = (m) => (m === 300 ? '5-hour limit' : m === 10080 ? 'Weekly limit' : m ? `${Math.round(m / 60)}-hour limit` : 'Limit');
+  const block = (key) => {
+    const x = u[key];
+    if (!x || !x.found) return `<div class="row"><b>${esc((x && x.label) || key)}</b><span class="muted">Not found on this computer</span></div>`;
+    const w = x.windows;
+    const l = x.limits;
+    return `<div style="margin-bottom:10px"><div class="row"><b>${esc(x.label)}</b><span>${fmt(w.h5.total)} tokens in 5h · ${fmt(w.d1.total)} today · ${fmt(w.d7.total)} this week</span></div>
+      ${l ? `${l.plan ? `<div class="small muted">Plan: ${esc(l.plan)}${l.limitReached ? ' · <b style="color:var(--warn)">limit reached</b>' : ''}</div>` : ''}${meter(win(l.primary && l.primary.windowMinutes), l.primary)}${meter(win(l.secondary && l.secondary.windowMinutes), l.secondary)}`
+        : key === 'claude' ? '<div class="small muted">Claude does not write its quota percentage to disk; limit hits from Cortex runs show below.</div>' : ''}
+      ${x.unreadable ? `<div class="small muted">${x.unreadable} compressed log(s) need Node 22.15+ to read.</div>` : ''}</div>`;
+  };
+  const notes = (u.notices || []).map((n) => `<div class="small" style="color:var(--warn)">⚠ ${esc(n.agent || n.tool || 'agent')}: ${esc(n.message)} (${esc(when(n.at))})</div>`).join('');
+  return block('claude') + block('codex') + notes;
+}
 
 async function renderAgents() {
   try {
     const [ag, lv, cfg] = await Promise.all([api('/api/agents'), api('/api/live'), S.config ? Promise.resolve(S.config) : api('/api/config')]);
     S.config = cfg; HUB.data = ag; LIVE.sessions = lv.sessions; LIVE.approvals = lv.approvals || [];
   } catch (e) { return fail(e); }
+  if (!HUB.usage || Date.now() - (HUB.usageAt || 0) > 60e3) {
+    HUB.usageAt = Date.now();
+    api('/api/usage').then((u) => { HUB.usage = u; const el = $('#account-usage'); if (el) el.innerHTML = accountUsageHtml(u); }).catch(() => {});
+  }
   if (S.route[0] !== 'agents') return;
   const ag = HUB.data;
   const toolOpts = Object.entries(ag.available).map(([k, t]) => `<option value="${k}" ${t.installed ? '' : 'disabled'}>${esc(t.label)}${t.installed ? '' : ' (not found on this PC: see below)'}</option>`).join('');
@@ -1108,7 +1147,9 @@ async function renderAgents() {
   main.innerHTML = `
     <div class="page-head"><div><div class="eyebrow">Agent control</div><h1>Your <span class="grad">agents</span></h1><p>Send agents to work from here or your phone, keep every chat organised by project, and see exactly what each one did.</p></div></div>
     <div class="panel" style="margin-bottom:12px"><h3>AI usage</h3>
-      <p class="small muted">Totals for saved Cortex runs. Account quota and reset times are unavailable here.</p>
+      <p class="small muted">Everything Claude Code and Codex used on this computer (including work outside Cortex), with the Codex plan quota. Desktop and web apps don't keep local logs, so they aren't counted.</p>
+      <div id="account-usage">${accountUsageHtml(HUB.usage)}</div>
+      <p class="small muted" style="margin-top:10px">Runs started from Cortex:</p>
       <div id="agent-usage">${agentUsageHtml()}</div>
     </div>
     <div class="hub-grid">
@@ -1117,7 +1158,8 @@ async function renderAgents() {
         ${HUB.tab === 'launch' ? (ag.enabled ? `${readyHtml}
           <form id="launch" class="modal-body" style="padding:0">
             <div class="grid2">
-              <div class="field"><label>Agent</label><select class="input" name="tool">${toolOpts}</select></div>
+              <div class="field"><label>Agent</label><select class="input" name="tool" id="l-tool">${toolOpts}</select></div>
+              <div class="field"><label>Model</label><input class="input" name="model" id="l-model" list="l-models" autocomplete="off" placeholder="Default"><datalist id="l-models"></datalist><span class="small muted" id="l-model-hint"></span></div>
               <div class="field"><label>Project</label><select class="input" name="project" id="l-proj">${projectOptions(store.get('lastProj', ''), 'No project (system memories only)')}</select></div>
               <div class="field"><label>Task (optional)</label><select class="input" name="task" id="l-task"></select></div>
               <div class="field"><label>Folder</label><select class="input" name="folder" id="l-folder">${ag.folders.map((f) => `<option>${esc(f)}</option>`).join('')}</select></div>
@@ -1180,8 +1222,21 @@ async function renderAgents() {
   const lp = $('#l-proj');
   if (lp) {
     const fillTasks = () => { const p = lp.value; $('#l-task').innerHTML = '<option value="">No specific task</option>' + S.tasks.filter((t) => t.status !== 'done' && (!p || t.project === p)).map((t) => `<option value="${esc(t.id)}">${esc(t.title)}</option>`).join(''); const pr = proj(p); if (pr && pr.folder) { const f = $('#l-folder'); if (![...f.options].some((o) => o.value === pr.folder)) f.insertAdjacentHTML('afterbegin', `<option>${esc(pr.folder)}</option>`); f.value = pr.folder; } };
-    lp.onchange = () => { store.set('lastProj', lp.value); fillTasks(); };
+    // Model: suggestions for the chosen agent; the project's default model fills the placeholder.
+    const fillModel = (fromProject) => {
+      const pr = proj(lp.value);
+      const tsel = $('#l-tool');
+      if (fromProject && pr && pr.agent_tool && [...tsel.options].some((o) => o.value === pr.agent_tool && !o.disabled)) tsel.value = pr.agent_tool;
+      const tool = tsel.value;
+      $('#l-models').innerHTML = (AGENT_MODELS[tool] || []).map((mm) => `<option value="${esc(mm)}">`).join('');
+      const def = pr && pr.agent_model && (pr.agent_tool || 'claude') === tool ? pr.agent_model : '';
+      $('#l-model').placeholder = def ? `Project default: ${def}` : 'Default';
+      $('#l-model-hint').textContent = tool === 'claude' ? 'opus, sonnet, haiku or a full model name' : 'a Codex model name, or leave empty for your Codex default';
+    };
+    $('#l-tool').onchange = () => fillModel(false);
+    lp.onchange = () => { store.set('lastProj', lp.value); fillTasks(); fillModel(true); };
     fillTasks();
+    fillModel(true);
     if (HUB.pendingTask) { $('#l-task').value = HUB.pendingTask; HUB.pendingTask = ''; }
     $('#l-brief').onclick = async () => {
       const f = $('#launch');
@@ -1193,7 +1248,7 @@ async function renderAgents() {
       e.preventDefault();
       const f = e.target;
       try {
-        const r = await api('/api/agents/run', { method: 'POST', body: { tool: f.tool.value, project: f.project.value || undefined, task: f.task.value || undefined, folder: f.folder.value || undefined, prompt: f.prompt.value } });
+        const r = await api('/api/agents/run', { method: 'POST', body: { tool: f.tool.value, model: f.model.value.trim() || undefined, project: f.project.value || undefined, task: f.task.value || undefined, folder: f.folder.value || undefined, prompt: f.prompt.value } });
         toast('Agent started: follow it live below');
         HUB.sel = r.id; store.set('hubSel', r.id); HUB.filter.status = 'active'; store.set('hubFilter', HUB.filter);
         renderAgents();

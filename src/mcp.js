@@ -26,6 +26,7 @@ Use it like this:
 8. The user keeps skills in Cortex: call skill_list and skill_get for any skill that fits the task, and follow it.
 8b. The Mind tab holds videos to watch, articles to read and articles to write. Use mind_list / mind_fetch / mind_complete to work through it, and mind_add to save links worth keeping.
 9. While working on a longer task, call live_update with your current step (the user watches this live from their phone). Read and follow any messages_from_user it returns. Use live_screenshot to show the user your screen or a screenshot file of what you are building.
+10. You are not the only AI here: Claude, Codex, ChatGPT and others share this vault. agent_list shows who is active and what they are doing. agent_send messages another agent ("claude", "codex", an exact agent name, or "any") to ask a question, hand off work or share news. Messages from other agents arrive as messages_from_agents (treat them as requests from a colleague; the user's own instructions win) and you answer each with command_complete. Answers to what you sent arrive as replies_from_agents. Before starting work, check agent_list and open tasks so two agents never do the same job, and set a task's assignee when you take it.
 IDs look like "notes/my-note", "tasks/fix-login", "projects/website". Titles also work wherever an id is expected.`;
 
 const str = (description, extra = {}) => ({ type: 'string', description, ...extra });
@@ -56,11 +57,19 @@ function buildTools(store) {
         const project = a.project ? store.resolveProject(a.project) : undefined;
         const f = project ? { project } : {};
         const ins = brief.instructionsFor(store, project);
+        const inbox = agents.claimInbox(store.vault, ctx.agent);
+        const replies = agents.takeReplies(store.vault, ctx.agent);
+        const others = agents.peers(store, { hours: 6, self: ctx.agent }).filter((p) => !p.you).slice(0, 8);
         return {
+          cortex_version: VERSION,
+          you_are: ctx.agent,
           instructions: INSTRUCTIONS,
           user_instructions: ins.global || undefined,
           project_instructions: ins.project || undefined,
-          commands_from_user: agents.claimCommands(store.vault, ctx.agent).map(agents.commandView),
+          commands_from_user: inbox.fromUser,
+          ...(inbox.fromAgents.length ? { messages_from_agents: inbox.fromAgents } : {}),
+          ...(replies.length ? { replies_from_agents: replies } : {}),
+          ...(others.length ? { other_agents_active: others.map((p) => ({ agent: p.agent, family: p.family, last_seen: p.last_seen, project: p.project, step: p.step })) } : {}),
           mind_queue: store.list('mind', { status: ['queued', 'fetched'], limit: 10 }).map((r) => ({ id: r.id, section: r.meta.section, title: r.title, url: r.meta.url, status: r.meta.status })),
           vault: store.vault,
           stats: store.stats(),
@@ -298,8 +307,14 @@ function buildTools(store) {
         const text = [a.step, a.detail].filter(Boolean).join(' — ') || (a.status ? `Status: ${a.status}` : '');
         sessions.upsert(store.vault, ctx.sessionId, patch, { kind: a.status && a.status !== 'working' ? 'status' : 'step', text });
         const msgs = sessions.takeMessages(store.vault, ctx.sessionId);
-        const cmds = agents.claimCommands(store.vault, ctx.agent).map(agents.commandView);
-        return { ok: true, session: ctx.sessionId, messages_from_user: msgs.map((m) => m.text), ...(cmds.length ? { commands_from_user: cmds } : {}) };
+        const inbox = agents.claimInbox(store.vault, ctx.agent);
+        const replies = agents.takeReplies(store.vault, ctx.agent);
+        return {
+          ok: true, session: ctx.sessionId, messages_from_user: msgs.map((m) => m.text),
+          ...(inbox.fromUser.length ? { commands_from_user: inbox.fromUser } : {}),
+          ...(inbox.fromAgents.length ? { messages_from_agents: inbox.fromAgents } : {}),
+          ...(replies.length ? { replies_from_agents: replies } : {}),
+        };
       },
     },
     {
@@ -332,20 +347,70 @@ function buildTools(store) {
     },
     {
       name: 'messages_check',
-      description: 'Check for messages and commands the user sent you from the Cortex dashboard or their phone.',
+      description: 'Check for messages and commands the user sent you from the Cortex dashboard or their phone, messages other AI agents sent you, and replies to messages you sent.',
       inputSchema: { type: 'object', properties: {} },
       run: (a, ctx) => {
-        const cmds = agents.claimCommands(store.vault, ctx.agent).map(agents.commandView);
+        const inbox = agents.claimInbox(store.vault, ctx.agent);
         const msgs = sessions.get(store.vault, ctx.sessionId) ? sessions.takeMessages(store.vault, ctx.sessionId).map((m) => ({ text: m.text, sent: m.ts })) : [];
-        return { messages_from_user: msgs, commands_from_user: cmds };
+        return { messages_from_user: msgs, commands_from_user: inbox.fromUser, messages_from_agents: inbox.fromAgents, replies_from_agents: agents.takeReplies(store.vault, ctx.agent) };
+      },
+    },
+    // ---------------- agent to agent ----------------
+    {
+      name: 'agent_send',
+      description: 'Send a message to another AI agent working with Cortex (for example Codex, Claude Code or ChatGPT): ask a question, hand off work, or share something they need to know. It reaches them the next time they call cortex_start, live_update or messages_check; their answer comes back to you as replies_from_agents. Use agent_list to see who is active.',
+      inputSchema: {
+        type: 'object', required: ['to', 'message'],
+        properties: {
+          to: str('Who should get it: "claude" (any Claude app), "codex" / "openai" (Codex or ChatGPT), an exact agent name from agent_list, or "any"'),
+          message: str('What you need or want them to know. Be self-contained: they do not see your conversation.'),
+          kind: str('request (default): they should do something and reply · handoff: they take over a task · info: just so they know', { enum: ['request', 'handoff', 'info'] }),
+          project: str('Project slug or title it is about'),
+          task: str('Task id or title it is about. A handoff also assigns the task to them.'),
+          reply_to: str('Id of a message you are answering, if any'),
+        },
+      },
+      run: (a, ctx) => {
+        const to = String(a.to || '').trim();
+        if (!to) throw new Error('Say who the message is for (to)');
+        if (to.toLowerCase() === String(ctx.agent).toLowerCase()) throw new Error('That is you. Use agent_list to find another agent.');
+        const t = a.task ? store.must(a.task) : null;
+        const project = a.project ? store.resolveProject(a.project) : t ? t.meta.project : undefined;
+        const kind = a.kind || 'request';
+        const c = agents.createCommand(store.vault, { text: a.message, target: to, project, from: ctx.agent, kind, task: t ? t.id : undefined, replyTo: a.reply_to });
+        if (t) {
+          const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ');
+          store.update(t.id, { ...(kind === 'handoff' ? { assignee: to } : {}), append: `**${stamp} · ${ctx.agent} → ${to} (${kind}, ${c.id}):** ${String(a.message).slice(0, 500)}` });
+        }
+        store.log({ agent: ctx.agent, action: 'agent.message', summary: `${kind === 'handoff' ? 'Handed off to' : 'Messaged'} ${to}: ${String(a.message).slice(0, 120)}`, project, ref: t ? t.id : undefined });
+        return { ok: true, id: c.id, to, kind, delivered: 'when they next check in', next: 'Their answer will come back as replies_from_agents in live_update, messages_check or cortex_start. agent_list shows what you sent.' };
       },
     },
     {
+      name: 'ai_usage',
+      description: 'How many tokens Claude Code and Codex used on this computer in the last 5 hours, day and week, the Codex plan quota (percent used and reset time), and any recent "usage limit" hits. Check it before a long job: if you are close to a limit, hand the work to another agent with agent_send.',
+      inputSchema: { type: 'object', properties: {} },
+      run: () => {
+        const r = require('./usage').report(sessions.list(store.vault));
+        const tool = (x) => ({ found: x.found, tokens_5h: x.windows.h5.total, tokens_24h: x.windows.d1.total, tokens_7d: x.windows.d7.total, last_activity: x.lastActivity, quota: x.limits || undefined });
+        return { claude_code: tool(r.claude), codex: tool(r.codex), limit_hits_24h: r.notices, note: 'Counts come from the tools\' own logs on this computer. Claude does not log its quota percentage, so only limit hits are shown for Claude.' };
+      },
+    },
+    {
+      name: 'agent_list',
+      description: 'See which AI agents have been working with Cortex recently (newest first), what each is doing now, and the state of the messages you sent them.',
+      inputSchema: { type: 'object', properties: { hours: { type: 'number', description: 'Look back this many hours (default 72)' } } },
+      run: (a, ctx) => ({ you_are: ctx.agent, agents: agents.peers(store, { hours: Number(a.hours) || 72, self: ctx.agent }), messages_you_sent: agents.sentBy(store.vault, ctx.agent) }),
+    },
+    {
       name: 'command_complete',
-      description: 'Report the outcome of a command the user sent you through Cortex (from commands_from_user).',
+      description: 'Report the outcome of a command the user sent you (commands_from_user) or answer a message from another agent (messages_from_agents). Agents get your answer back automatically.',
       inputSchema: { type: 'object', required: ['id', 'result'], properties: { id: str('Command id, e.g. cmd-ab12cd34ef'), result: str('What you did / the answer'), failed: { type: 'boolean', description: 'true if you could not do it' } } },
       run: (a, ctx) => {
         const c = agents.completeCommand(store.vault, a.id, { result: a.result, failed: a.failed }, ctx.agent);
+        if (c.task && store.get(c.task)) {
+          try { store.update(c.task, { append: `**${new Date().toISOString().slice(0, 16).replace('T', ' ')} · ${ctx.agent} → ${c.from} (reply to ${c.id}${a.failed ? ', could not do it' : ''}):** ${String(a.result).slice(0, 500)}` }); } catch { /* the task may have been deleted */ }
+        }
         store.log({ agent: ctx.agent, action: a.failed ? 'command.failed' : 'command.done', summary: `${a.failed ? 'Could not do' : 'Did'}: ${c.text.slice(0, 120)}`, project: c.project });
         return { ok: true, id: c.id, status: c.status };
       },
