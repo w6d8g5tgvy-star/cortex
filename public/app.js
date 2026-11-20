@@ -1919,7 +1919,7 @@ async function renderSettings() {
       <div class="pair">
         <div class="qr" id="qr"></div>
         <div class="pair-info">
-          <div class="field"><label>Connect over</label><select class="input" id="pair-addr">${addrs.map((a, i) => `<option value="${i}">${a.kind === 'tailscale' ? 'Tailscale (works anywhere)' : 'Wi-Fi / home network'} · ${esc(a.ip)}</option>`).join('')}</select></div>
+          <div class="field"><label>Connect over</label><select class="input" id="pair-addr">${addrs.map((a, i) => `<option value="${i}">${a.kind === 'public' ? 'Public link (works anywhere, also on mobile data)' : a.kind === 'tailscale' ? 'Tailscale (works anywhere)' : 'Wi-Fi / home network'} · ${esc(a.ip)}</option>`).join('')}</select></div>
           <ol class="small" style="padding-left:18px;margin:4px 0"><li>Scan the QR code with your phone's camera.</li><li>Open the link. Your phone stays paired.</li><li>Optional: <b>Share → Add to Home Screen</b> for an app icon.</li></ol>
           <div class="code"><pre id="pair-url"></pre><button class="btn sm copy" id="pair-copy">${icon('i-copy')}</button></div>
           <button class="btn sm danger" id="rotate">Unpair all devices</button>
