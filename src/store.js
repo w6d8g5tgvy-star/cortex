@@ -418,6 +418,42 @@ class Store extends EventEmitter {
     return hits.slice(0, Number(f.limit) || 20);
   }
 
+  /** The passage of a record that best answers `q`: the paragraph or list item with the most query terms,
+   *  grown with its neighbours (and its section heading) up to `max` characters. Lets an agent read the
+   *  answer straight from a search result instead of spending a turn on memory_get. */
+  passage(rec, q, max = 700) {
+    const qt = new Set(tokenize(q));
+    const body = String(rec.body || '').replace(/^---[\s\S]*?---\s*/, '');
+    const lines = body.split(/\r?\n/);
+    const blocks = []; // paragraphs and list items, with their nearest heading
+    let heading = ''; let cur = [];
+    const flush = () => { if (cur.length) blocks.push({ heading, text: cur.join('\n') }); cur = []; };
+    for (const ln of lines) {
+      if (/^#{1,6}\s/.test(ln)) { flush(); heading = ln.replace(/^#+\s*/, '').trim(); continue; }
+      if (!ln.trim()) { flush(); continue; }
+      if (/^\s*([-*+]|\d+\.)\s/.test(ln) && cur.length && !/^\s/.test(ln)) flush();
+      cur.push(ln);
+    }
+    flush();
+    if (!blocks.length) return '';
+    const score = (b) => { const toks = tokenize(b.heading + ' ' + b.text); let s = 0; const seen = new Set(); for (const t of toks) if (qt.has(t) && !seen.has(t)) { seen.add(t); s++; } return s; };
+    let best = 0; let bestS = -1;
+    blocks.forEach((b, i) => { const s = score(b); if (s > bestS) { bestS = s; best = i; } });
+    if (bestS <= 0) return '';
+    let lo = best; let hi = best;
+    let text = blocks[best].text;
+    while (text.length < max) {
+      const canUp = lo > 0 && blocks[lo - 1].heading === blocks[best].heading;
+      const canDown = hi < blocks.length - 1 && blocks[hi + 1].heading === blocks[best].heading;
+      if (!canUp && !canDown) break;
+      const up = canUp ? score(blocks[lo - 1]) : -1; const down = canDown ? score(blocks[hi + 1]) : -1;
+      if (down >= up && canDown) { if ((text + '\n' + blocks[hi + 1].text).length > max) break; text += '\n' + blocks[++hi].text; }
+      else { if ((blocks[lo - 1].text + '\n' + text).length > max) break; text = blocks[--lo].text + '\n' + text; }
+    }
+    const head = blocks[best].heading ? `[${blocks[best].heading}] ` : '';
+    return (head + text).slice(0, max + 80);
+  }
+
   projectStats(slug) {
     const counts = { todo: 0, doing: 0, blocked: 0, done: 0, total: 0 };
     for (const r of this.items.values()) {

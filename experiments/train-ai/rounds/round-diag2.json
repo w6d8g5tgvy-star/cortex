@@ -1,0 +1,146 @@
+{
+  "summary": {
+    "round": "diag2",
+    "model": "claude-haiku-5-5",
+    "trials": 1,
+    "snapshot": "C:/Users/sheri/Cortex-train/snapshot-r0",
+    "passes": 2,
+    "runs": 2,
+    "pass_rate": 1,
+    "run_cost": 0.0083,
+    "training_cost": 0,
+    "total_cost": 0.0083,
+    "E": 239.98,
+    "avg_turns": 5,
+    "out_tokens": 2577,
+    "in_tokens": 148097,
+    "avg_seconds": 13.3,
+    "by_task": {
+      "scope": "1/1",
+      "backup": "1/1"
+    }
+  },
+  "date": "2026-11-20T23:22:38.820Z",
+  "runs": [
+    {
+      "task": "backup",
+      "trial": 1,
+      "pass": true,
+      "passed": 3,
+      "total": 3,
+      "failures": [],
+      "ms": 10394,
+      "cost": 0.003301,
+      "turns": 4,
+      "out_tokens": 693,
+      "in_tokens": 59264,
+      "split": {
+        "input": 6,
+        "cache_write": 12428,
+        "cache_read": 46830,
+        "output": 693,
+        "models": {
+          "claude-haiku-5-5": {
+            "inputTokens": 6,
+            "outputTokens": 693,
+            "cacheReadInputTokens": 46830,
+            "cacheCreationInputTokens": 12428,
+            "webSearchRequests": 0,
+            "costUSD": 0.003301,
+            "contextWindow": 1000000,
+            "maxOutputTokens": 128000,
+            "thinkingTokens": 375,
+            "cacheCreationEphemeral5mInputTokens": 0,
+            "cacheCreationEphemeral1hInputTokens": 12428,
+            "canonicalModel": "claude-haiku-5-5",
+            "provider": "firstParty",
+            "costBasis": "list"
+          }
+        }
+      },
+      "calls": [
+        {
+          "tool": "memory_search",
+          "input": "{\"query\":\"backup copy config file rules\",\"limit\":10}",
+          "result_chars": 5030
+        },
+        {
+          "tool": "cortex_start",
+          "input": "{\"goal\":\"Find the rule for the backup copy Cortex keeps when it changes a user config file\",\"model\":\"claude-haiku-5-5\"}",
+          "result_chars": 6440
+        },
+        {
+          "tool": "memory_search",
+          "input": "{\"query\":\"cortex-backup\",\"limit\":5}",
+          "result_chars": 2908
+        }
+      ],
+      "answer": "```js\nfunction backupPath(filePath) {\n  return `${filePath}.cortex-backup`;\n}\n```"
+    },
+    {
+      "task": "scope",
+      "trial": 1,
+      "pass": true,
+      "passed": 15,
+      "total": 15,
+      "failures": [],
+      "ms": 16204,
+      "cost": 0.0050331199999999994,
+      "turns": 6,
+      "out_tokens": 1884,
+      "in_tokens": 88833,
+      "split": {
+        "input": 8,
+        "cache_write": 16853,
+        "cache_read": 71972,
+        "output": 1884,
+        "models": {
+          "claude-haiku-5-5": {
+            "inputTokens": 8,
+            "outputTokens": 1884,
+            "cacheReadInputTokens": 71972,
+            "cacheCreationInputTokens": 16853,
+            "webSearchRequests": 0,
+            "costUSD": 0.0050331199999999994,
+            "contextWindow": 1000000,
+            "maxOutputTokens": 128000,
+            "thinkingTokens": 1056,
+            "cacheCreationEphemeral5mInputTokens": 0,
+            "cacheCreationEphemeral1hInputTokens": 16853,
+            "canonicalModel": "claude-haiku-5-5",
+            "provider": "firstParty",
+            "costBasis": "list"
+          }
+        }
+      },
+      "calls": [
+        {
+          "tool": "cortex_start",
+          "input": "{\"model\":\"claude-haiku-5-5\",\"goal\":\"SkyBlock macros project: isInScope(feature) scope decision for features route-checker, auto-mining, slayer-automation etc.\"}",
+          "result_chars": 5749
+        },
+        {
+          "tool": "memory_search",
+          "input": "{\"query\":\"SkyBlock macros scope decision isInScope\"}",
+          "result_chars": 4375
+        },
+        {
+          "tool": "memory_get",
+          "input": "{\"id\":\"notes/skyblock-macros/skyblock-macros-scope-rules-and-gotchas\"}",
+          "result_chars": 5332
+        },
+        {
+          "tool": "memory_get",
+          "input": "{\"id\":\"notes/skyblock-macros/status-skyblock-macros-build-progress\"}",
+          "result_chars": 5423
+        },
+        {
+          "tool": "activity_log",
+          "input": "{\"model\":\"claude-haiku-5-5\",\"project\":\"skyblock-macros\",\"summary\":\"Wrote isInScope(feature) matching the 2026-11-14 scope decision (player-operated tools only):",
+          "result_chars": 597
+        }
+      ],
+      "answer": "```js\nfunction isInScope(feature) {\n  // Scope decision of 2026-11-14: player-operated tools only (hypixel.net rules).\n  const inScope = new Set([\n    \"route-checker\",\n    \"route-preview-overlay\",\n    \"guided-waypoint\",\n    \"stats-hud\",\n    \"readiness-check\",\n    \"tool-advisor\",\n    \"diagnostics\"\n  ]);\n  // Declined: auto route following, automated mining/combat/trading,\n  // powder grinders, Watchdog/anti-staff detection, input randomisation.\n  return inScope.has(feature);\n}\n```"
+    }
+  ]
+}

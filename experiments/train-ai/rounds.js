@@ -64,7 +64,7 @@ function ask(vault, prompt) {
       j.calls = calls;
       const u = j.usage || {};
       fs.rmSync(cfg, { force: true }); fs.rmSync(cwd, { recursive: true, force: true });
-      resolve({ calls: j.calls, text: String(j.result || ''), ms: Date.now() - t0, cost: Number(j.total_cost_usd || 0), turns: j.num_turns, out_tokens: Number(u.output_tokens || 0), in_tokens: Number(u.input_tokens || 0) + Number(u.cache_read_input_tokens || 0) + Number(u.cache_creation_input_tokens || 0), error: err ? String(err.message).slice(0, 200) : (j.is_error ? 'is_error' : undefined) });
+      resolve({ split: { input: u.input_tokens, cache_write: u.cache_creation_input_tokens, cache_read: u.cache_read_input_tokens, output: u.output_tokens, models: j.modelUsage }, calls: j.calls, text: String(j.result || ''), ms: Date.now() - t0, cost: Number(j.total_cost_usd || 0), turns: j.num_turns, out_tokens: Number(u.output_tokens || 0), in_tokens: Number(u.input_tokens || 0) + Number(u.cache_read_input_tokens || 0) + Number(u.cache_creation_input_tokens || 0), error: err ? String(err.message).slice(0, 200) : (j.is_error ? 'is_error' : undefined) });
     });
   });
 }
@@ -84,7 +84,7 @@ const extract = (t) => ([...t.matchAll(/```(?:js|javascript)?\s*\n([\s\S]*?)```/
       const a = await ask(vault, PREFIX + t.prompt);
       const sc = t.score(extract(a.text));
       const pass = sc.passed === sc.total;
-      runs.push({ task: t.id, trial: i + 1, pass, passed: sc.passed, total: sc.total, failures: sc.failures, ms: a.ms, cost: a.cost, turns: a.turns, out_tokens: a.out_tokens, in_tokens: a.in_tokens, error: a.error, ...(TRACE ? { calls: a.calls, answer: a.text.slice(0, 600) } : {}) });
+      runs.push({ task: t.id, trial: i + 1, pass, passed: sc.passed, total: sc.total, failures: sc.failures, ms: a.ms, cost: a.cost, turns: a.turns, out_tokens: a.out_tokens, in_tokens: a.in_tokens, split: a.split, error: a.error, ...(TRACE ? { calls: a.calls, answer: a.text.slice(0, 600) } : {}) });
       console.log(`${t.id.padEnd(8)} #${i + 1}: ${pass ? 'PASS' : 'fail'} ${sc.passed}/${sc.total} · ${(a.ms / 1000).toFixed(0)}s · $${a.cost.toFixed(4)} · ${a.turns} turns${a.error ? ' · ' + a.error : ''}`);
       fs.rmSync(vault, { recursive: true, force: true });
     }

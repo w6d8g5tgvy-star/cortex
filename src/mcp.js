@@ -61,10 +61,14 @@ function buildTools(store) {
   return [
     {
       name: 'cortex_start',
-      description: 'Load working context: active projects, open tasks, pinned and recent memories, and recent agent activity. Call this first in every session.',
-      inputSchema: { type: 'object', properties: { project: str('Optional project slug or title to focus on') } },
+      description: 'Load working context: active projects, open tasks, pinned and recent memories, and recent agent activity. Call this first in every session. Pass `goal` (what you are about to do, in plain words) to also get the passages from Cortex memory that matter for it.',
+      inputSchema: { type: 'object', properties: { project: str('Optional project slug or title to focus on'), goal: str('What you are about to do, in plain words. Cortex returns the most relevant memory passages as `relevant_memories`.') } },
       run: (a, ctx) => {
         const project = a.project ? store.resolveProject(a.project) : undefined;
+        // Knowledge notes only (agent journals are logs, and their one-off details mislead), best 4 with their key passage.
+        const relevant = a.goal ? store.search(a.goal, { kind: 'note', limit: 12, ...(project ? { scope: 'project+system', projectScope: project } : {}) })
+          .filter((h) => !h.rec.meta.agent_journal).slice(0, 4)
+          .map((h) => ({ id: h.rec.id, title: h.rec.title, passage: store.passage(h.rec, a.goal, 650) || h.snippet })) : null;
         const f = project ? { project } : {};
         const ins = brief.instructionsFor(store, project);
         const inbox = agents.claimInbox(store.vault, ctx.agent);
@@ -78,6 +82,7 @@ function buildTools(store) {
         const pnotes = project ? store.list('note', { project, limit: 16 }) : [];
         const snotes = store.list('note', { scope: 'system' });
         return {
+          ...(relevant ? { relevant_memories: relevant.length ? relevant : 'Nothing in Cortex memory matches this goal yet.' } : {}),
           cortex_version: VERSION,
           you_are: ctx.agent,
           your_model: ctx.model || 'not reported yet: pass your model name as `model` (e.g. in live_update or task_update) so your tasks show it',
@@ -260,7 +265,8 @@ function buildTools(store) {
         const st = settings.load(store.vault).search;
         const hits = st.semantic && fs.existsSync(require('path').join(store.vault, '.cortex', 'embeddings.json')) ? await require('./semantic').hybrid(store, a.query, opts, st.model) : store.search(a.query, opts);
         return hits
-          .map((h) => ({ id: h.rec.id, kind: h.rec.kind, title: h.rec.title, score: h.score, snippet: h.snippet, updated: h.rec.updated }));
+          // The top 3 note hits carry the passage that best answers the query, so the answer is usually readable right here.
+          .map((h, i) => { const p = i < 3 && h.rec.kind === 'note' ? store.passage(h.rec, a.query, 600) : ''; return { id: h.rec.id, kind: h.rec.kind, title: h.rec.title, score: h.score, ...(p ? { passage: p } : { snippet: h.snippet }), updated: h.rec.updated }; });
       },
     },
     {
