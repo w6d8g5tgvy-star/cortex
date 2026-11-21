@@ -497,7 +497,7 @@ class Store extends EventEmitter {
       ts: now(),
       agent: String(entry.agent || 'user').slice(0, 80),
       action: String(entry.action || 'note').slice(0, 60),
-      summary: String(entry.summary || '').slice(0, 2000),
+      summary: require('./redact').redact(String(entry.summary || ''), this.vault).slice(0, 2000),
     };
     if (entry.project) e.project = String(entry.project);
     if (entry.ref) e.ref = String(entry.ref);

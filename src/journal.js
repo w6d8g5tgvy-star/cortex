@@ -35,6 +35,7 @@ function append(vault, project, markdown) {
   const text = fs.readFileSync(f, 'utf8');
   const head = `\n## ${day()}\n`;
   let out = text.includes(head) ? '' : head;
+  markdown = require('./redact').redact(markdown, vault); // agents' replies can contain pairing links or keys
   out += markdown.endsWith('\n') ? markdown : markdown + '\n';
   // keep the front-matter "updated" fresh so the vault shows the journal as recently changed
   const updated = text.replace(/^updated: .*$/m, `updated: "${new Date().toISOString()}"`);
