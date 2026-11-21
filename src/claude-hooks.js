@@ -219,9 +219,12 @@ function recall(vault, project, prompt, seen = {}) {
   const ids = Object.fromEntries(hits.map((h) => [h.rec.id, String(h.rec.meta.updated || '')]));
   for (const p of picks) ids['lesson:' + p.lesson + ':' + p.name] = '1';
   const tech = picks.length ? '\n[Cortex] Vetted techniques that fit (say which one you use):\n' + picks.map((p) => `- ${p.line} (${p.lesson})`).join('\n') : '';
-  // Lessons from Fetcher show their key takeaways (the advice itself), other notes a short snippet.
-  const preview = (h) => (h.rec.meta.fetcher_lesson && require('./fetcher').lessonPreview(h.rec)) || clip(h.snippet, 150);
-  const mem = hits.length ? '[Cortex] Related memories (memory_get for the full note):\n' + hits.map((h) => `- ${h.rec.title} (${h.rec.id}${h.rec.meta.project ? '' : ', system'}): ${preview(h)}`).join('\n') : '';
+  // Lessons from Fetcher show their key takeaways (the advice itself); other notes show the passage that answers the
+  // prompt (the best hit gets more room), not a snippet cut mid-word: in the Train AI benchmark, answering passages
+  // took a small model from 23 to 24/30 and cut turns, because the answer is read without a memory_get.
+  const preview = (h, i) => (h.rec.meta.fetcher_lesson && require('./fetcher').lessonPreview(h.rec))
+    || clip(store.passage(h.rec, prompt, i === 0 ? 420 : 220), i === 0 ? 480 : 260) || clip(h.snippet, 150);
+  const mem = hits.length ? '[Cortex] Related memories (memory_get for the full note):\n' + hits.map((h, i) => `- ${h.rec.title} (${h.rec.id}${h.rec.meta.project ? '' : ', system'}): ${preview(h, i)}`).join('\n') : '';
   return { ids, text: clip((mem + tech).trim(), 2000) };
 }
 

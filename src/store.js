@@ -436,7 +436,19 @@ class Store extends EventEmitter {
     }
     flush();
     if (!blocks.length) return '';
-    const score = (b) => { const toks = tokenize(b.heading + ' ' + b.text); let s = 0; const seen = new Set(); for (const t of toks) if (qt.has(t) && !seen.has(t)) { seen.add(t); s++; } return s; };
+    // Score = query words in the paragraph, each weighted by how rare it is within this note (words that are
+    // everywhere in the note, or in its title, say little). Wikilink text doesn't count ("Related: [[…]]" lines
+    // repeat titles), the section heading counts half, and the note's # title not at all.
+    // Prefix matching like search(): the light stemmer gives "removes" → "remov" but leaves "remove" as is.
+    const qList = [...qt];
+    const match = (t) => (qt.has(t) ? t : qList.find((q) => Math.min(q.length, t.length) >= 5 && (q.startsWith(t) || t.startsWith(q))));
+    const hits = (text) => { const s = new Set(); for (const t of tokenize(String(text).replace(WIKI, ' '))) { const m = match(t); if (m) s.add(m); } return s; };
+    const df = new Map();
+    const blockHits = blocks.map((b) => { const h = hits(b.text); for (const t of h) df.set(t, (df.get(t) || 0) + 1); return h; });
+    const titleWords = hits(rec.title);
+    const w = (t) => Math.log(1 + blocks.length / (1 + (df.get(t) || 0))) * (titleWords.has(t) ? 0.3 : 1);
+    const scoreAt = (i) => { const b = blocks[i]; let s = 0; for (const t of blockHits[i]) s += w(t); if (!/^#\s/.test(b.headLine)) for (const t of hits(b.heading)) if (!blockHits[i].has(t)) s += 0.5 * w(t); return s; };
+    const score = (b) => scoreAt(blocks.indexOf(b));
     let best = 0; let bestS = -1;
     blocks.forEach((b, i) => { const s = score(b); if (s > bestS) { bestS = s; best = i; } });
     if (bestS <= 0) return '';

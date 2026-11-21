@@ -97,6 +97,12 @@ const again = hooks.recall(vault, 'shop', 'How should I write tests for the chec
 assert.ok(!again.text.includes('Vetted techniques that fit'), 'same technique is not repeated in one session');
 ok('briefs for a task and the per-prompt recall hook show only fitting techniques, once per session');
 
+// --- the recall hook shows the passage that answers, not a snippet cut mid-word ---
+store.create('note', { title: 'Release process', project: 'shop', body: '# Release process\n\nSome history about the shop and how it began, long ago, with many details that do not matter here at all.\n\n## Deploying\nDeploys go out on Fridays at 10:00 after the smoke tests pass; roll back with `make rollback` within 15 minutes if checkout errors rise.\n' });
+const rp = hooks.recall(vault, 'shop', 'how do we deploy and roll back the shop', {});
+assert.ok(rp.text.includes('## Deploying') && rp.text.includes('make rollback') && rp.text.includes('15 minutes'), rp.text);
+ok('the per-prompt recall hook shows the passage that answers the prompt (with its heading)');
+
 fs.rmSync(vault, { recursive: true, force: true });
 console.log(`All ${passed} lesson checks passed.`);
 process.exit(0);
