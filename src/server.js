@@ -337,7 +337,7 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
     try {
       const pick = agents.pickAgent(proj && proj.meta, j.tool, j.model);
       const r = runner.launch({ ...pick, prompt: j.prompt, cwd, permission: s.permission, maxMinutes: s.maxMinutes, project: j.project, task: j.task, from: j.from });
-      store.log({ agent: j.from, action: 'agent.start', summary: `Started ${pick.tool === 'codex' ? 'Codex' : 'Claude Code'} on this computer: ${String(j.prompt || j.task || '').slice(0, 120)}`, project: j.project, ref: j.id });
+      store.log({ agent: j.from, action: 'agent.start', summary: `Started ${pick.tool === 'codex' ? 'Codex' : 'Claude Code'} on this computer: ${String(j.prompt || j.task || '').slice(0, 120)}`, project: j.project, ref: j.id, device: 'This computer' });
       broadcast({ type: 'live' });
       return jobsMod.patch(vault, j.id, { status: 'running', runId: r.id, step: 'Running on this computer', startedAt: new Date().toISOString() });
     } catch (e) { return jobsMod.patch(vault, j.id, { status: 'error', step: e.message }); }
@@ -422,6 +422,7 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
       sessions.upsert(vault, j.id, { status: done ? (j.status === 'error' ? 'error' : 'done') : 'working', step: j.step, ...(j.result ? { result: j.result } : {}), ...(j.cost_usd ? { cost_usd: j.cost_usd } : {}) }, done ? { kind: 'status', text: `${j.status === 'done' ? '✓ Finished' : j.status === 'stopped' ? '■ Stopped' : '✗ ' + j.step} on ${dev.name}` } : undefined);
       if (done && !j.recorded) {
         notifyJob(j);
+        store.log({ agent: j.tool === 'codex' ? 'codex' : 'claude-code', action: j.status === 'done' ? 'job.done' : 'job.failed', summary: `${j.status === 'done' ? 'Finished' : 'Ended (' + j.status + ')'} on ${dev.name}: ${String(j.prompt || j.task || '').slice(0, 100)}`, project: j.project, ref: j.id, device: dev.name });
         try { brief.recordOutcome(store, { project: j.project, task: j.task, agent: j.tool === 'codex' ? 'codex' : 'claude-code', prompt: j.prompt, status: j.status === 'done' ? 'done' : j.status, result: j.result || j.step, runId: j.id }); } catch { /* best effort */ }
         jobsMod.patch(vault, j.id, { recorded: true });
       }
@@ -814,6 +815,19 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
     // ---- automatic troubleshooting ----
     if (p === '/api/doctor' && m === 'GET') return send(res, 200, await require('./doctor').diagnose({ vault, store, conf, runner, tunnel, smart, claudeHooks, updater }));
     if (p === '/api/doctor/fix' && m === 'POST') { if (!localOnly()) return; const b = await json(); try { const r = await require('./doctor').fix(b.action, { vault, runner, tunnel, smart, claudeHooks, checkUpdates }); store.log({ agent, action: 'doctor.fix', summary: `Troubleshooting: ran "${b.action}"` }); return send(res, 200, r); } catch (e) { return send(res, 400, { error: e.message }); } }
+    // ---- timeline, feedback, preferences, shortcuts ----
+    if (p === '/api/timeline' && m === 'GET') { const q = Object.fromEntries(u.searchParams); return send(res, 200, require('./userprefs').timeline(store, { ...q, limit: Math.min(300, Number(q.limit) || 100) })); }
+    if (p === '/api/feedback' && m === 'POST') { const b = await json(); try { return send(res, 201, require('./userprefs').addFeedback(store, b, agent)); } catch (e) { return send(res, 400, { error: e.message }); } }
+    if (p === '/api/feedback' && m === 'GET') return send(res, 200, { items: require('./userprefs').listFeedback(vault).slice(0, 100) });
+    if (p === '/api/preferences' && m === 'GET') return send(res, 200, require('./userprefs').preferences(store, conf()));
+    if (p === '/api/preferences/forget' && m === 'POST') { const b = await json(); const pr = conf().preferences || { forgotten: [] }; const f = new Set(pr.forgotten || []); if (b.restore) f.delete(b.key); else f.add(String(b.key).slice(0, 40)); settingsMod.save(vault, { ...conf(), preferences: { ...pr, forgotten: [...f] } }); return send(res, 200, { forgotten: [...f] }); }
+    if (p === '/api/shortcuts' && m === 'GET') return send(res, 200, { shortcuts: conf().shortcuts || [] });
+    if (p === '/api/shortcuts' && m === 'POST') {
+      const b = await json(); let list = (conf().shortcuts || []).slice();
+      if (b.remove) list = list.filter((x) => x.name !== b.remove);
+      else { const name = String(b.name || '').trim().slice(0, 40); const text = String(b.text || '').trim().slice(0, 300); if (!name || !text) return send(res, 400, { error: 'A shortcut needs a name and a command' }); list = list.filter((x) => x.name !== name); list.push({ name, text }); list = list.slice(-9); }
+      settingsMod.save(vault, { ...conf(), shortcuts: list }); return send(res, 200, { shortcuts: list });
+    }
     // ---- interface mode (Simple / Advanced) and hidden panels: any paired device may change its look ----
     if (p === '/api/ui' && m === 'POST') {
       const b = await json(); const cur = conf().ui || {};

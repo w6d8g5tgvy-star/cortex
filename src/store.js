@@ -513,6 +513,7 @@ class Store extends EventEmitter {
     };
     if (entry.project) e.project = String(entry.project);
     if (entry.ref) e.ref = String(entry.ref);
+    if (entry.device) e.device = String(entry.device).slice(0, 60);
     if (entry.model) e.model = String(entry.model).slice(0, 80);
     fs.mkdirSync(path.dirname(this.actFile), { recursive: true });
     fs.appendFileSync(this.actFile, JSON.stringify(e) + '\n');

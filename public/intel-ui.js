@@ -169,9 +169,69 @@
     draw();
   }
 
+  // ---------------- Timeline (Live page), feedback on jobs, shortcuts, preferences ----------------
+  async function timelinePanel() {
+    const main = document.querySelector('#main'); if (!main || main.querySelector('#tl-panel')) return;
+    const p = document.createElement('div'); p.className = 'panel'; p.id = 'tl-panel'; p.style.marginTop = '16px'; main.appendChild(p);
+    const f = { project: '', agent: '', device: '', type: '', q: '' };
+    const draw = async () => {
+      const qs = new URLSearchParams(Object.entries(f).filter(([, v]) => v)).toString();
+      let d; try { d = await api('/api/timeline?' + qs); } catch (e) { p.innerHTML = `<h3>Timeline</h3><div class="small">${esc(e.message)}</div>`; return; }
+      const sel = (k, list, label) => `<select class="input" data-tl="${k}" style="width:auto"><option value="">${label}</option>${list.map((v) => `<option ${f[k] === v ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select>`;
+      p.innerHTML = `<h3 style="margin-top:0">Timeline</h3><div class="in-row">${sel('project', d.filters.projects, 'All projects')}${sel('agent', d.filters.agents, 'All agents')}${sel('device', d.filters.devices, 'All devices')}${sel('type', d.filters.types, 'All events')}<input class="input" data-tl="q" placeholder="Search" value="${esc(f.q)}" style="width:140px"></div>
+        <div style="margin-top:8px">${d.items.slice(0, 60).map((e) => `<div class="in-row small" style="padding:5px 0;border-bottom:1px solid var(--edge)"><span class="in-n" style="width:72px">${timeAgo(e.ts)}</span><span style="color:${e.result === 'problem' ? 'var(--bad)' : 'var(--text-2)'}">${e.result === 'problem' ? '✗' : '•'}</span><b>${esc(e.agent)}</b><span style="flex:1">${esc(e.summary)}</span><span class="in-n">${esc(e.type)}${e.device ? ' · ' + esc(e.device) : ''}${e.project ? ' · ' + esc(e.project) : ''}</span></div>`).join('') || '<div class="small muted">Nothing matches.</div>'}</div>`;
+      p.querySelectorAll('[data-tl]').forEach((el) => (el.onchange = () => { f[el.dataset.tl] = el.value; draw(); }));
+    };
+    draw();
+  }
+  function jobFeedback() {
+    document.querySelectorAll('#jb-panel .jb').forEach((row) => {
+      if (row.querySelector('.fb-btns')) return;
+      const st = row.querySelector('.st'); if (!st || !/Done|Failed/.test(st.textContent)) return;
+      const id = (row.querySelector('[data-jb-retry]') || {}).dataset?.jbRetry || row.dataset.id || '';
+      const box = document.createElement('span'); box.className = 'fb-btns'; box.innerHTML = '<button class="btn sm ghost" title="Good result">👍</button><button class="btn sm ghost" title="Bad result">👎</button>';
+      row.querySelector('.jb-btns').appendChild(box);
+      box.querySelectorAll('button').forEach((b, i) => (b.onclick = async () => { const text = i ? prompt('What went wrong? (optional)') || '' : ''; try { await api('/api/feedback', { method: 'POST', body: { about: 'agent results', rating: i ? 'down' : 'up', text, ref: id } }); box.innerHTML = '<span class="small muted">Thanks</span>'; } catch (e) { fail(e); } }));
+    });
+  }
+  async function shortcutsInto(panel) {
+    if (!panel || panel.querySelector('#sc-row')) return;
+    const row = document.createElement('div'); row.id = 'sc-row'; row.className = 'in-row'; row.style.marginTop = '8px'; panel.appendChild(row);
+    const draw = async () => {
+      const d = await api('/api/shortcuts').catch(() => ({ shortcuts: [] }));
+      row.innerHTML = d.shortcuts.map((s, i) => `<button class="btn sm" data-sc="${esc(s.text)}" title="Alt+${i + 1}">${esc(s.name)}</button>`).join('') + '<button class="btn sm ghost" id="sc-add" title="Save what is typed above as a shortcut">+ Save as shortcut</button>';
+      row.querySelectorAll('[data-sc]').forEach((b) => (b.onclick = () => { const q = panel.querySelector('#cc-q'); q.value = b.dataset.sc; panel.querySelector('#cc-f').requestSubmit(); }));
+      row.querySelector('#sc-add').onclick = async () => { const text = panel.querySelector('#cc-q').value.trim(); if (!text) return toast('Type a command first', true); const name = prompt('Name for this shortcut', text.slice(0, 24)); if (!name) return; try { await api('/api/shortcuts', { method: 'POST', body: { name, text } }); draw(); } catch (e) { fail(e); } };
+      window.__cortexShortcuts = d.shortcuts;
+    };
+    draw();
+  }
+  document.addEventListener('keydown', (e) => {
+    const typing = /INPUT|TEXTAREA|SELECT/.test((document.activeElement || {}).tagName || '');
+    if (e.key === '/' && !typing) { const q = document.querySelector('#cc-q'); if (q) { e.preventDefault(); q.focus(); } else { location.hash = '#/home'; } }
+    if (e.altKey && /^[1-9]$/.test(e.key) && window.__cortexShortcuts && window.__cortexShortcuts[Number(e.key) - 1]) { e.preventDefault(); location.hash = '#/home'; setTimeout(() => { const q = document.querySelector('#cc-q'); if (q) { q.value = window.__cortexShortcuts[Number(e.key) - 1].text; document.querySelector('#cc-f').requestSubmit(); } }, 400); }
+  });
+  async function prefsPanel() {
+    const grid = document.querySelector('.settings-grid'); if (!grid || grid.querySelector('#pf-set')) return;
+    const p = document.createElement('div'); p.className = 'panel'; p.id = 'pf-set'; grid.appendChild(p);
+    const draw = async () => {
+      const d = await api('/api/preferences');
+      p.innerHTML = `<h3>What Cortex knows about how you work</h3><p class="small muted">${esc(d.note)}</p>
+        ${d.learned.map((l) => `<div class="in-imp"><div class="in-row"><b style="flex:1;font-size:12.5px">${esc(l.label)}</b><button class="btn sm ghost" data-pf="${esc(l.key)}">Forget</button></div><div class="small">${esc(l.value)}</div><div class="in-n">from ${esc(l.source)}</div></div>`).join('')}
+        <div class="small" style="margin-top:8px"><b>Your saved preferences</b> (memories; edit or delete them in the Memory vault)</div>${d.explicit.map((n) => `<div class="small"><a href="#/memory/${encodeURIComponent(n.id)}">${esc(n.title)}</a></div>`).join('') || '<div class="small muted">None yet.</div>'}
+        ${d.forgotten.length ? `<div class="small muted" style="margin-top:6px">Forgotten: ${d.forgotten.map((k) => `<a href="javascript:void 0" data-pf-r="${esc(k)}">${esc(k)} (show again)</a>`).join(', ')}</div>` : ''}
+        <div class="in-sec"><b class="small">Feedback about Cortex</b><form class="cc-in" id="pf-fb" style="margin-top:4px"><input class="input" id="pf-fbt" placeholder="Optional: what's confusing, slow or missing?"><button class="btn sm">Send</button></form></div>`;
+      p.querySelectorAll('[data-pf]').forEach((b) => (b.onclick = async () => { await api('/api/preferences/forget', { method: 'POST', body: { key: b.dataset.pf } }); draw(); }));
+      p.querySelectorAll('[data-pf-r]').forEach((b) => (b.onclick = async () => { await api('/api/preferences/forget', { method: 'POST', body: { key: b.dataset.pfR, restore: true } }); draw(); }));
+      p.querySelector('#pf-fb').onsubmit = async (e) => { e.preventDefault(); const t = p.querySelector('#pf-fbt').value.trim(); if (!t) return; try { await api('/api/feedback', { method: 'POST', body: { about: 'cortex', text: t } }); toast('Thanks: feedback saved'); p.querySelector('#pf-fbt').value = ''; } catch (err) { fail(err); } };
+    };
+    draw();
+  }
+
   const wrap = (name, after) => { const orig = window[name]; if (typeof orig !== 'function') return; window[name] = function (...a) { const r = orig.apply(this, a); Promise.resolve(r).then(() => after()).catch((e) => console.warn(name, e)); return r; }; };
-  wrap('renderHome', () => { if (S.route[0] === 'home') commandPanel(); });
-  wrap('renderAgents', () => { if (S.route[0] === 'agents') return intelPanel(); });
+  wrap('renderHome', () => { if (S.route[0] === 'home') { commandPanel(); shortcutsInto(document.querySelector('#cc-panel')); } });
+  wrap('renderLive', () => { if (S.route[0] === 'live') return timelinePanel(); });
+  wrap('renderAgents', () => { if (S.route[0] === 'agents') { setTimeout(jobFeedback, 1500); return intelPanel(); } });
   wrap('renderSkills', () => { if (S.route[0] === 'skills') return skillVersions(); });
-  wrap('renderSettings', () => { if (S.route[0] === 'settings') { uiPanel(); return doctorPanel(); } });
+  wrap('renderSettings', () => { if (S.route[0] === 'settings') { uiPanel(); prefsPanel(); return doctorPanel(); } });
 })();
