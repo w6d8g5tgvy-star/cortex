@@ -1,0 +1,25 @@
+'use strict';
+// Usage forecast (2.2 #32): projections only from measured limits; Claude's unreported limit is never invented.
+const assert = require('assert');
+const fs = require('fs'); const os = require('os'); const path = require('path');
+const usage = require('../src/usage');
+let passed = 0; const ok = (n) => { passed++; console.log('  ✓', n); };
+const now = Date.parse('2026-11-22T12:00:00Z');
+const win = (total) => ({ h1: { total }, h5: { total: total * 5 }, d1: { total: total * 10 } });
+const orig = usage.report;
+usage.report = () => ({ claude: { label: 'Claude Code', found: true, windows: win(200000), limits: null }, codex: { label: 'Codex', found: true, windows: win(50000), limits: { checkedAt: new Date(now).toISOString(), primary: { usedPercent: 60, windowMinutes: 300, resetsAt: new Date(now + 150 * 60000).toISOString() } } }, notices: [] });
+delete require.cache[require.resolve('../src/forecast')];
+const { forecast } = require('../src/forecast');
+const { Store } = require('../src/store');
+const st = new Store(fs.mkdtempSync(path.join(os.tmpdir(), 'fc-')));
+let f = forecast(st, [], now);
+assert.equal(f.tools.claude.limit.usedPercent, null); assert.match(f.tools.claude.limit.source, /not reported/);
+assert.equal(f.tools.codex.limit.usedPercent, 60);
+assert.ok(f.tools.codex.limit.projectedFullAt, '60% used in 150 of 300 min → full at ~250 min, before the reset at 300');
+assert.ok(f.warnings.some((w) => /reaches its limit/.test(w)));
+usage.report = () => ({ codex: { label: 'Codex', found: true, windows: win(1000), limits: { checkedAt: new Date(now).toISOString(), primary: { usedPercent: 20, windowMinutes: 300, resetsAt: new Date(now + 60 * 60000).toISOString() } } }, notices: [] });
+f = forecast(st, [], now);
+assert.equal(f.tools.codex.limit.willLast, true); assert.equal(f.tools.codex.limit.projectedFullAt, null);
+usage.report = orig;
+ok('forecasts limits only from measured numbers: warns when the pace runs out before the reset, says when it will last, never invents Claude\'s limit');
+console.log(`All ${passed} forecast checks passed.`);

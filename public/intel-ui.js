@@ -110,7 +110,52 @@
     draw();
   }
 
+  // ---------------- Skills → versions ----------------
+  async function skillVersions() {
+    const main = document.querySelector('#main'); if (!main) return;
+    main.querySelectorAll('[data-sk-edit]').forEach((btn) => {
+      const name = String(btn.dataset.skEdit).replace(/^skills\//, '');
+      if (btn.parentNode.querySelector('[data-sk-ver]')) return;
+      const v = document.createElement('button'); v.className = 'btn sm ghost'; v.dataset.skVer = name; v.textContent = 'Versions';
+      btn.after(v);
+      v.onclick = async () => {
+        const box = btn.closest('.panel, .card, div').querySelector('.sk-ver') || Object.assign(document.createElement('div'), { className: 'sk-ver in-sec' });
+        btn.closest('.row').after(box);
+        try {
+          const d = await api('/api/skills/versions?name=' + encodeURIComponent(name));
+          box.innerHTML = d.versions.map((x) => `<div class="in-imp"><div class="in-row"><b style="flex:1;font-size:12.5px">v${x.version} · ${esc(x.status)}</b><span class="small muted">${esc(x.by || '')} · ${timeAgo(x.at)}</span></div><div class="small muted">used ${x.uses}× · helped ${x.helpedRate.n ? Math.round(x.helpedRate.value * 100) + '% of ' + x.helpedRate.n + ' reports' : 'no reports yet'}${x.models.length ? ' · works with ' + esc(x.models.join(', ')) : ''}${x.note ? ' · ' + esc(x.note) : ''}</div>${x.status !== 'default' ? `<button class="btn sm" data-sk-def="${x.version}">Make default</button>` : ''}</div>`).join('');
+          box.querySelectorAll('[data-sk-def]').forEach((b2) => (b2.onclick = async () => { try { await api('/api/skills/versions', { method: 'POST', body: { name, version: Number(b2.dataset.skDef) } }); toast('Default changed'); v.click(); } catch (e) { fail(e); } }));
+        } catch (e) { fail(e); }
+      };
+    });
+  }
+
+  // ---------------- Simple / Advanced mode + hidden panels ----------------
+  const ADV_PAGES = ['graph', 'skills', 'fetcher'];
+  const PANELS = { 'cc-panel': 'Tell Cortex what to do', 'gs-panel': 'Get set up', 'in-panel': 'Intelligence', 'jb-panel': 'Run on your computers', 'ss-panel': 'SmartSave (project page)' };
+  let UI = { mode: 'advanced', hidePanels: [] };
+  const uiCss = document.createElement('style'); document.head.appendChild(uiCss);
+  function applyUi() {
+    document.body.classList.toggle('mode-simple', UI.mode === 'simple');
+    uiCss.textContent = (UI.mode === 'simple' ? ADV_PAGES.map((p) => `body.mode-simple [data-go="${p}"]`).join(',') + '{display:none!important} body.mode-simple #in-panel .in-tbl, body.mode-simple #in-panel #in-rt{display:none}' : '') + (UI.hidePanels || []).map((id) => `#${id}{display:none!important}`).join('');
+  }
+  api('/api/ui').then((u) => { UI = u; applyUi(); }).catch(() => {});
+  async function uiPanel() {
+    const grid = document.querySelector('.settings-grid'); if (!grid || grid.querySelector('#ui-set')) return;
+    const p = document.createElement('div'); p.className = 'panel'; p.id = 'ui-set';
+    let fc = null; try { fc = await api('/api/usage/forecast'); } catch { /* optional */ }
+    p.innerHTML = `<h3>Interface</h3><div class="in-row"><span class="small" style="flex:1">Mode</span><span class="seg"><button type="button" data-ui-mode="simple" class="${UI.mode === 'simple' ? 'on' : ''}">Simple</button><button type="button" data-ui-mode="advanced" class="${UI.mode !== 'simple' ? 'on' : ''}">Advanced</button></span></div>
+      <p class="small muted">Simple hides the Neural map, Skills and Fetcher pages and the detailed numbers. Nothing is removed; switch back any time.</p>
+      <div class="small" style="margin-top:8px"><b>Show these panels</b></div>${Object.entries(PANELS).map(([id, label]) => `<label class="small" style="display:block;margin-top:4px"><input type="checkbox" data-ui-panel="${id}" ${(UI.hidePanels || []).includes(id) ? '' : 'checked'}> ${esc(label)}</label>`).join('')}
+      ${fc ? `<div class="in-sec"><b class="small">Usage forecast</b>${Object.values(fc.tools).map((t) => `<div class="small" style="margin-top:4px">${esc(t.label)}: ${Math.round(t.tokensToday / 1000)}k tokens today · ~${Math.round(t.perHour / 1000)}k/hour · limit: ${t.limit && t.limit.usedPercent !== null ? `${Math.round(t.limit.usedPercent)}% used${t.limit.projectedFullAt ? `, full around ${new Date(t.limit.projectedFullAt).toLocaleTimeString()}` : ', lasts until it resets'}` : `<span class="in-u">${esc(t.limit ? t.limit.source : 'unknown')}</span>`}</div>`).join('')}${fc.warnings.map((w) => `<div class="small" style="color:var(--warn)">⚠ ${esc(w)}</div>`).join('')}${fc.suggestions.map((w) => `<div class="small muted">💡 ${esc(w)}</div>`).join('')}</div>` : ''}`;
+    grid.prepend(p);
+    p.querySelectorAll('[data-ui-mode]').forEach((b) => (b.onclick = async () => { UI = await api('/api/ui', { method: 'POST', body: { mode: b.dataset.uiMode } }); applyUi(); p.remove(); uiPanel(); }));
+    p.querySelectorAll('[data-ui-panel]').forEach((c) => (c.onchange = async () => { const hide = [...p.querySelectorAll('[data-ui-panel]')].filter((x) => !x.checked).map((x) => x.dataset.uiPanel); UI = await api('/api/ui', { method: 'POST', body: { hidePanels: hide } }); applyUi(); }));
+  }
+
   const wrap = (name, after) => { const orig = window[name]; if (typeof orig !== 'function') return; window[name] = function (...a) { const r = orig.apply(this, a); Promise.resolve(r).then(() => after()).catch((e) => console.warn(name, e)); return r; }; };
   wrap('renderHome', () => { if (S.route[0] === 'home') commandPanel(); });
   wrap('renderAgents', () => { if (S.route[0] === 'agents') return intelPanel(); });
+  wrap('renderSkills', () => { if (S.route[0] === 'skills') return skillVersions(); });
+  wrap('renderSettings', () => { if (S.route[0] === 'settings') return uiPanel(); });
 })();

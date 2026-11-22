@@ -46,6 +46,7 @@ function buildBrief(store, { project, task, assignment, runId }) {
   if (t) {
     lines.push(`## Your task: ${t.title} (${t.id})`, '', `Status: ${t.meta.status} · priority ${t.meta.priority || 'medium'}${t.meta.due ? ` · due ${t.meta.due}` : ''}`, '');
     if (t.body && t.body.trim()) lines.push(clip(t.body, 4000), '');
+    try { const miss = require('./context').missingInfo(t); if (miss.length) lines.push(...miss.map((x) => `> ${x}`), ''); } catch { /* optional */ }
     try { lines.push('### Fetcher (research help) for this task', '', ...require('./task-fetcher').briefLines(store, t), ''); } catch { /* optional */ }
     try {
       const pit = require('./intel').failures.briefLines(store.vault, `${t.title}\n${t.body || ''}\n${assignment || ''}`, { project: slug });
@@ -67,7 +68,11 @@ function buildBrief(store, { project, task, assignment, runId }) {
     slug ? `- Save what you learn about this project with \`memory_write\` and project "${slug}" (stored in notes/${slug}/). Save things that apply to every project (the user's preferences, general how-tos) WITHOUT a project, as system memories. Update existing notes instead of duplicating them.` : '- Save anything worth remembering with `memory_write` (add a project when it is specific to one). Update existing notes instead of duplicating them.',
     '- Finish with `activity_log` summarising what you did, then end your reply with a short summary of the outcome.',
     '- If the Cortex tools are not available, still finish with a clear summary: Cortex records it for you.');
-  return { text: lines.join('\n'), project: slug, task: t ? t.id : undefined };
+  // context optimization: token budget, duplicates removed, instruction-like memory text hidden (no AI used)
+  const raw = lines.join('\n');
+  let text = raw; let contextStats = null;
+  try { const budget = Number((settings.load(store.vault).context || {}).budgetTokens) || 6000; const o = require('./context').optimize(raw, { budgetTokens: budget }); text = o.text; contextStats = o.stats; } catch { /* fall back to the full brief */ }
+  return { text, project: slug, task: t ? t.id : undefined, contextStats };
 }
 
 /** Record a finished run in Cortex: the project's agent log note, the task, and the activity feed. */

@@ -602,18 +602,37 @@ function buildTools(store) {
       name: 'skill_get',
       description: 'Read a skill\'s full instructions and follow them.',
       inputSchema: { type: 'object', required: ['name'], properties: { name: str('Skill name from skill_list') } },
-      run: (a) => { const r = store.get('skills/' + String(a.name).replace(/^skills\//, '')) || store.must(a.name); if (r.kind !== 'skill') throw new Error('Not a skill'); return skills.skillMd(r); },
+      run: (a, ctx) => {
+        const r = store.get('skills/' + String(a.name).replace(/^skills\//, '')) || store.must(a.name); if (r.kind !== 'skill') throw new Error('Not a skill');
+        // versioned: usually the default; a candidate version on alternate uses so it can earn its place
+        let use = null; try { use = require('./skill-versions').forUse(store, r, { model: ctx && ctx.model }); } catch { /* unversioned */ }
+        const md = use && use.status === 'candidate' ? skills.skillMd({ ...r, body: use.body, meta: { ...r.meta, description: use.description } }) : skills.skillMd(r);
+        return use ? `${md}\n\n<!-- skill ${r.slug} version ${use.version} (${use.status}). After using it, report with skill_feedback: name "${r.slug}", version ${use.version}. -->` : md;
+      },
     },
     {
       name: 'skill_save',
       description: 'Create or update a skill in the user\'s library (only when the user asks you to save a skill).',
-      inputSchema: { type: 'object', required: ['title', 'description', 'instructions'], properties: { title: str('Skill name'), description: str('When to use it (one or two sentences)'), instructions: str('The skill instructions in Markdown') } },
+      inputSchema: { type: 'object', required: ['title', 'description', 'instructions'], properties: { title: str('Skill name'), description: str('When to use it (one or two sentences)'), instructions: str('The skill instructions in Markdown'), note: str('What changed and why (for a new version)'), sources: { type: 'array', items: { type: 'string' }, description: 'Where the method comes from (links, notes)' } } },
       run: (a, ctx) => {
-        const existing = store.list('skill').find((r) => r.title.toLowerCase() === String(a.title).toLowerCase());
-        const r = existing ? store.update(existing.id, { description: a.description, body: a.instructions }) : store.create('skill', { title: a.title, description: a.description, body: a.instructions, author: ctx.agent });
-        store.log({ agent: ctx.agent, action: 'skill.save', summary: `${existing ? 'Updated' : 'Created'} skill "${r.title}"`, ref: r.id });
-        return { name: r.slug, id: r.id };
+        // Agents' changes to an existing skill become a CANDIDATE version; it replaces the default only after it
+        // proves at least as helpful (skill_feedback, ≥ 3 reports). New skills and the user's own edits apply directly.
+        const r = require('./skill-versions').saveVersion(store, { title: a.title, description: a.description, instructions: a.instructions, by: ctx.agent || 'agent', note: a.note, sources: Array.isArray(a.sources) ? a.sources : [] });
+        store.log({ agent: ctx.agent, action: 'skill.save', summary: `${r.created ? 'Created' : r.status === 'candidate' ? 'Proposed a new version of' : 'Updated'} skill "${r.rec.title}"${r.version ? ` (v${r.version}${r.status === 'candidate' ? ', candidate' : ''})` : ''}`, ref: r.rec.id });
+        return { name: r.rec.slug, id: r.rec.id, version: r.version, status: r.status };
       },
+    },
+    {
+      name: 'skill_feedback',
+      description: 'Report how a skill version worked for you (helped, partly, didnt_help). Candidate versions become the default only when they do at least as well as the current one, so honest reports matter.',
+      inputSchema: { type: 'object', required: ['name', 'result'], properties: { name: str('Skill name (slug)'), version: { type: 'number', description: 'Version you used (shown at the end of skill_get)' }, result: str('helped, partly or didnt_help', { enum: ['helped', 'partly', 'didnt_help'] }), note: str('What happened, briefly') } },
+      run: (a, ctx) => require('./skill-versions').feedback(store, String(a.name).replace(/^skills\//, ''), { version: a.version, result: a.result, model: ctx.model || ctx.agent, note: a.note }),
+    },
+    {
+      name: 'skill_versions',
+      description: 'Version history of a skill: which version is the default, candidates being tested, how often each was used, how helpful it was, compatible models and sources.',
+      inputSchema: { type: 'object', required: ['name'], properties: { name: str('Skill name (slug)') } },
+      run: (a) => require('./skill-versions').list(store, String(a.name).replace(/^skills\//, '')),
     },
     // ---------------- mind ----------------
     {

@@ -811,6 +811,20 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
       return send(res, 200, { ok: true, left: q.length });
     }
 
+    // ---- interface mode (Simple / Advanced) and hidden panels: any paired device may change its look ----
+    if (p === '/api/ui' && m === 'POST') {
+      const b = await json(); const cur = conf().ui || {};
+      const next = { ...cur, ...(b.mode && ['simple', 'advanced'].includes(b.mode) ? { mode: b.mode } : {}), ...(Array.isArray(b.hidePanels) ? { hidePanels: b.hidePanels.filter((x) => /^[\w-]{1,30}$/.test(x)).slice(0, 20) } : {}) };
+      settingsMod.save(vault, { ...conf(), ui: next }); return send(res, 200, next);
+    }
+    if (p === '/api/ui' && m === 'GET') return send(res, 200, conf().ui || { mode: 'advanced', hidePanels: [] });
+    // ---- usage forecast (measured numbers only; never invents a provider limit) ----
+    if (p === '/api/usage/forecast' && m === 'GET') return send(res, 200, require('./forecast').forecast(store, sessions.list(vault)));
+
+    // ---- skill versions ----
+    if (p === '/api/skills/versions' && m === 'GET') { try { return send(res, 200, require('./skill-versions').list(store, u.searchParams.get('name'))); } catch (e) { return send(res, 404, { error: e.message }); } }
+    if (p === '/api/skills/versions' && m === 'POST') { if (!localOnly()) return; const b = await json(); try { const r = require('./skill-versions').setDefault(store, b.name, b.version); store.log({ agent, action: 'skill.version', summary: `Made version ${b.version} the default for skill "${b.name}"` }); return send(res, 200, r); } catch (e) { return send(res, 400, { error: e.message }); } }
+
     // ---- Intelligence (2.2): profiles, failures, improvements, routing ----
     if (p === '/api/intel' && m === 'GET') {
       const I = require('./intel');
