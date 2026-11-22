@@ -513,6 +513,37 @@ function buildTools(store) {
       },
     },
     {
+      name: 'smartsave_checkpoints',
+      description: 'SmartSave: the latest saved checkpoints of a project (files saved automatically from its folder, with recovery context: task, last step, files touched, blockers, git branch) and where each is backed up. Use it to continue unfinished work, for example after a crash, a limit, or on another computer (ask the user to restore it, or restore with the Cortex dashboard).',
+      inputSchema: { type: 'object', required: ['project'], properties: { project: str('Project slug or title'), limit: { type: 'number', description: 'How many (default 5)' } } },
+      run: (a) => {
+        const { SmartSave } = require('./smartsave');
+        const path = require('path');
+        const slug = store.resolveProject(a.project);
+        const ss = new SmartSave({ home: path.join(store.vault, '.cortex', 'smartsave'), store, config: () => settings.load(store.vault).smartsave });
+        const st = ss.status().projects[slug];
+        const list = ss.snapshots(slug, { limit: Math.min(20, Number(a.limit) || 5) });
+        let latest = null; if (list[0] && !list[0].corrupt) { const m = ss.repo.getSnapshot(slug, list[0].id); latest = { id: m.id, time: m.time, device: m.device, reason: m.reason, files: m.files.length, git: m.git, context: m.context, deleted: m.deleted.slice(0, 20) }; }
+        return { project: slug, enabled: !!(st && st.enabled), protection: st ? st.protection : 'off', lastProtected: st ? st.lastProtected : null, latest, checkpoints: list.map((x) => ({ id: x.id, time: x.time, reason: x.reason, device: x.device, files: x.files })) };
+      },
+    },
+    {
+      name: 'smartsave_save',
+      description: 'SmartSave: save a checkpoint of a project folder right now (before a risky change, or when you are about to run out of context or tokens). Free: no AI is used. Only works for projects the user turned SmartSave on for.',
+      inputSchema: { type: 'object', required: ['project'], properties: { project: str('Project slug or title') } },
+      run: (a) => {
+        const { SmartSave } = require('./smartsave');
+        const path = require('path');
+        const slug = store.resolveProject(a.project);
+        const ss = new SmartSave({ home: path.join(store.vault, '.cortex', 'smartsave'), store, config: () => settings.load(store.vault).smartsave });
+        if (!ss.enabledProjects().includes(slug)) throw new Error('SmartSave is not turned on for this project (the user can turn it on in the project).');
+        const r = ss.checkpoint(slug, { reason: 'saved by an agent', force: true });
+        // the running Cortex uploads it
+        try { const fs = require('fs'); const d = path.join(store.vault, '.cortex', 'smartsave', 'triggers'); fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, `${Date.now()}-mcp.json`), JSON.stringify({ reason: 'upload', project: slug, urgent: false })); } catch { /* the timer uploads it anyway */ }
+        return { saved: r.snapshot, files: r.files, changed: (r.changed || 0) + (r.added || 0), deleted: r.deleted || 0, note: 'Saved locally; Cortex uploads it to the backup targets in the background.' };
+      },
+    },
+    {
       name: 'experience_digest',
       description: 'What earlier agent sessions on a project learned the hard way, worked out from its agent journal for free: files changed most, fail → fix pairs, recurring trouble, and who saves what they learn. Read it before starting work; turn real patterns into memory_write rules.',
       inputSchema: { type: 'object', required: ['project'], properties: { project: str('Project slug or title') } },

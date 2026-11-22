@@ -31,7 +31,7 @@ function list(vault, { limit = 50 } = {}) {
  * Create a job. `needsApproval` for requests from AI agents. Throws (with a plain reason) on bad input,
  * a duplicate of an active job, or too many launches in 10 minutes.
  */
-function create(vault, { device = 'local', deviceName, tool = 'claude', model, prompt, project, task, from = 'you', needsApproval = false }) {
+function create(vault, { device = 'local', deviceName, tool = 'claude', model, prompt, project, task, from = 'you', needsApproval = false, restore }) {
   if (!TOOLS.includes(tool)) throw new Error(`Unknown agent tool "${tool}". Use claude or codex.`);
   prompt = String(prompt || '').trim().slice(0, 8000);
   if (!prompt && !task) throw new Error('Say what the agent should do');
@@ -46,7 +46,7 @@ function create(vault, { device = 'local', deviceName, tool = 'claude', model, p
   if (dup) { const e = new Error(`The same job is already ${dup.status === 'needs-approval' ? 'waiting for approval' : dup.status} (${dup.id}).`); e.code = 'DUPLICATE'; e.job = dup; throw e; }
   const j = {
     id: 'job-' + crypto.randomBytes(5).toString('hex'), key, device, deviceName: deviceName || (device === 'local' ? 'This computer' : device),
-    tool, model: model || undefined, prompt, project: project || undefined, task: task || undefined, from,
+    tool, model: model || undefined, prompt, project: project || undefined, task: task || undefined, from, restore: restore || undefined,
     status: needsApproval ? 'needs-approval' : 'queued', step: needsApproval ? `Waiting for your OK (asked by ${from})` : 'Queued',
     created: new Date().toISOString(),
   };

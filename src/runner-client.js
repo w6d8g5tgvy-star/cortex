@@ -47,8 +47,58 @@ function folderFor(conf, job) {
   return cands.find((f) => fs.existsSync(f) && (conf.folders || []).some((a) => path.resolve(f).toLowerCase().startsWith(path.resolve(a).toLowerCase())));
 }
 
+// ---------- SmartSave on this computer: protect its work (upload to the main Cortex) and keep copies of the main
+// Cortex's checkpoints (replication), so either computer can die without losing unfinished work ----------
+let smart = null;
+async function smartSave(conf, log) {
+  if (smart) return smart;
+  try {
+    const r = await call(conf, '/api/runner/smartsave-key');
+    const { SmartSave } = require('./smartsave');
+    const key = SmartSave.parseRecoveryKey(r.key);
+    const current = { projects: {} };
+    const ss = new SmartSave({ home: path.join(HOME, 'smartsave'), key, device: (conf.device && conf.device.name) || os.hostname(), config: () => ({ enabled: true, projects: current.projects, targets: [{ id: 'main', type: 'cortex', name: 'Main Cortex', hub: conf.hub, token: conf.token }] }) });
+    smart = { ss, current };
+  } catch (e) { log(`(SmartSave not available: ${e.message})`); smart = { ss: null }; }
+  return smart;
+}
+async function checkpointJob(conf, ws, cwd, reason, log) {
+  const s = await smartSave(conf, log);
+  if (!s.ss) return null;
+  s.current.projects = { [ws]: { enabled: true, root: cwd } };
+  try { const r = s.ss.checkpoint(ws, { reason, root: cwd }); await s.ss.uploadPending({ maxMs: 30000 }); return r; } catch (e) { log(`  (SmartSave: ${e.message})`); return null; }
+}
+/** Copy the main Cortex's new checkpoints here and tell it they're safe on this computer. */
+async function replicate(conf, log) {
+  const s = await smartSave(conf, log);
+  if (!s.ss) return 0;
+  const { CortexTarget } = require('./smartsave/targets');
+  const tg = new CortexTarget({ hub: conf.hub, token: conf.token });
+  const feed = await call(conf, '/api/runner/smartsave-feed', { since: conf.replicaCursor || '' });
+  const done = [];
+  for (const it of feed.items || []) {
+    try { await s.ss.fetchFrom(tg, it.ws, it.id); s.ss.repo.verifySnapshot(it.ws, it.id).ok && done.push(it); conf.replicaCursor = it.id; } catch (e) { log(`  (copy of ${it.ws} failed: ${e.message})`); break; }
+  }
+  if (done.length) { await call(conf, '/api/runner/smartsave-ack', { items: done }); saveConf(conf); }
+  return done.length;
+}
+
 async function runOne(conf, job, runner, sessions, log) {
-  const cwd = folderFor(conf, job);
+  let cwd = folderFor(conf, job);
+  const ws = /^[\w-]{1,80}$/.test(job.project || '') ? job.project : 'unsorted';
+  if (cwd && job.restore) {
+    // continue unfinished work: restore the checkpoint (from the main Cortex) into a new folder here
+    try {
+      const s = await smartSave(conf, log);
+      const { CortexTarget } = require('./smartsave/targets');
+      await s.ss.fetchFrom(new CortexTarget({ hub: conf.hub, token: conf.token }), job.restore.ws, job.restore.id);
+      const dest = path.join(cwd, `${job.restore.ws}-restored-${job.restore.id.slice(0, 9)}`);
+      const r = s.ss.restore(job.restore.ws, job.restore.id, { dest });
+      if (r.failed.length) throw new Error(`${r.failed.length} files could not be restored`);
+      log(`  restored ${r.written + r.same} files into ${dest}`);
+      cwd = dest;
+    } catch (e) { await call(conf, '/api/runner/update', { id: job.id, status: 'error', step: `Could not restore the checkpoint: ${e.message}` }); return; }
+  }
   if (!cwd) { await call(conf, '/api/runner/update', { id: job.id, status: 'error', step: 'No allowed folder on this computer. Start the runner with --folder "<path>".' }); return; }
   let run;
   try {
@@ -56,15 +106,17 @@ async function runOne(conf, job, runner, sessions, log) {
     run = runner.launch({ tool: job.tool, model: job.model, prompt: job.prompt, project: job.project, task: job.task, cwd, permission: conf.permission || 'acceptEdits', maxMinutes: conf.maxMinutes || 120, briefText: job.brief, from: 'cortex (remote)' });
   } catch (e) { await call(conf, '/api/runner/update', { id: job.id, status: 'error', step: e.message }); return; }
   log(`▶ ${job.id}: ${String(job.prompt || job.task).slice(0, 80)} (in ${cwd})`);
+  let lastSave = Date.now();
   for (;;) {
     await new Promise((r) => setTimeout(r, 3000));
+    if (Date.now() - lastSave > 120000) { lastSave = Date.now(); checkpointJob(conf, ws, cwd, 'while the agent works', log); }
     const s = sessions.get(runner.vault, run.id) || {};
     const finished = s.status && s.status !== 'working';
     const status = finished ? (s.status === 'error' ? 'error' : 'done') : 'running';
     let resp = {};
     try { resp = await call(conf, '/api/runner/update', { id: job.id, status, step: s.step, result: finished ? s.result : undefined, cost_usd: s.cost_usd }); } catch (e) { log(`  (could not report: ${e.message})`); }
     if (resp.stop && !finished) { runner.stop(run.id); try { await call(conf, '/api/runner/update', { id: job.id, status: 'stopped', step: 'Stopped by you' }); } catch { /* reported next time */ } log(`■ ${job.id} stopped`); return; }
-    if (finished) { log(`${status === 'done' ? '✓' : '✗'} ${job.id}: ${String(s.step || '').slice(0, 100)}`); return; }
+    if (finished) { await checkpointJob(conf, ws, cwd, status === 'done' ? 'agent finished' : 'agent stopped', log); log(`${status === 'done' ? '✓' : '✗'} ${job.id}: ${String(s.step || '').slice(0, 100)}`); return; }
   }
 }
 
@@ -80,8 +132,9 @@ async function start(opts, log = console.log) {
   const store = new Store(path.join(HOME, 'vault'));
   const runner = new AgentRunner(store);
   log(`Cortex runner ${VERSION}: "${(conf.device && conf.device.name) || os.hostname()}" connected to ${conf.hub}. Allowed folders: ${(conf.folders || []).join(', ') || 'none'}. Waiting for jobs (Ctrl+C to stop).`);
-  let backoff = 5000;
+  let backoff = 5000; let lastReplica = 0;
   for (;;) {
+    if (Date.now() - lastReplica > (opts.once ? 0 : 5 * 60000)) { lastReplica = Date.now(); try { const n = await replicate(conf, log); if (n) log(`Kept a copy of ${n} checkpoint${n === 1 ? '' : 's'} from the main Cortex.`); } catch (e) { if (e.status === 401) throw new Error('This computer was removed from Cortex. Pair it again with a new code.'); } }
     try {
       const r = await call(conf, '/api/runner/next');
       backoff = 5000;
@@ -96,4 +149,4 @@ async function start(opts, log = console.log) {
   }
 }
 
-module.exports = { start, pair, folderFor, loadConf, HOME };
+module.exports = { start, pair, folderFor, loadConf, replicate, HOME, _reset: () => { smart = null; } };

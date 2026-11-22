@@ -116,6 +116,7 @@ function startServer({ store, port, host, token: cliToken }) {
   setTimeout(semIndex, 5000).unref();
   store.on('change', () => { clearTimeout(semTimer); semTimer = setTimeout(semIndex, 15000); semTimer.unref(); });
   const runner = new AgentRunner(store);
+  const smart = require('./smartsave/service').startService({ vault, store, conf: () => conf(), log: (e) => { try { store.log({ agent: 'cortex', ...e }); } catch { /* best effort */ } }, onChange: () => broadcast({ type: 'smartsave' }) });
   // Fetcher: this server is the one place research jobs run (agents' MCP processes only queue them).
   const fetcher = new Fetcher({ store, runner, broadcast: (ev) => broadcast(ev) });
   setTimeout(() => fetcher.pickUp(), 4000).unref();
@@ -229,6 +230,7 @@ function startServer({ store, port, host, token: cliToken }) {
     if (!updateState.info || !updateState.info.available) throw new Error(updateState.error || 'Already up to date');
     updateState.installing = true;
     broadcast({ type: 'update' });
+    try { await smart.beforeUpdate(); } catch { /* never block an update */ }
     try {
       const r = await updater.apply(updateState.info);
       store.log({ agent: 'cortex', action: 'update', summary: `Updated Cortex ${r.from} → ${r.to}` });
@@ -362,8 +364,36 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
       if (!j) return send(res, 200, { job: null });
       sessions.upsert(vault, j.id, { agent: j.tool === 'codex' ? 'codex' : 'claude-code', title: String(j.prompt || j.task).slice(0, 140), status: 'working', step: `Starting on ${dev.name}…`, workspace: dev.name, launched: true, tool: j.tool, project: j.project, task: j.task, device: dev.name, from: j.from });
       broadcast({ type: 'live' });
-      return send(res, 200, { job: { id: j.id, tool: j.tool, model: j.model, prompt: j.prompt, project: j.project, task: j.task, brief: jobBrief(j) } });
+      return send(res, 200, { job: { id: j.id, tool: j.tool, model: j.model, prompt: j.prompt, project: j.project, task: j.task, brief: jobBrief(j), ...(j.restore ? { restore: j.restore } : {}) } });
     }
+    if (u.pathname === '/api/runner/smartsave-key' && req.method === 'POST') return send(res, 200, { key: smart.ss.recoveryKey() });
+    if (u.pathname.startsWith('/api/runner/smartsave/')) {
+      const key = u.pathname.slice('/api/runner/smartsave/'.length);
+      const { KEY_RE } = require('./smartsave/targets');
+      if (!KEY_RE.test(key)) return send(res, 400, { error: 'bad key' });
+      const f = path.join(smart.ss.repo.dir, ...key.split('/'));
+      if (req.method === 'HEAD') { try { return res.writeHead(fs.statSync(f).size > 0 ? 200 : 404).end(); } catch { return res.writeHead(404).end(); } }
+      if (req.method === 'GET') { try { const b = fs.readFileSync(f); res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': b.length }); return res.end(b); } catch { return send(res, 404, { error: 'Not found' }); } }
+      if (req.method === 'PUT') {
+        const chunks = []; let n = 0;
+        for await (const c of req) { n += c.length; if (n > 60 * 1024 * 1024) return send(res, 413, { error: 'too large' }); chunks.push(c); }
+        const buf = Buffer.concat(chunks);
+        try { smart.ss.repo.open(buf); } catch (e) { return send(res, 400, { error: 'not a valid SmartSave object: ' + e.message }); } // only intact objects sealed with our key
+        if (!fs.existsSync(f)) require('./smartsave/repo').writeAtomic(f, buf);
+        broadcast({ type: 'smartsave' });
+        return send(res, 200, { ok: true });
+      }
+      return send(res, 405, { error: 'method' });
+    }
+    if (u.pathname === '/api/runner/smartsave-feed' && req.method === 'POST') {
+      // snapshots made on THIS computer that the paired computer doesn't have yet (it keeps a copy: replication)
+      const since = String(b.since || '');
+      const items = [];
+      for (const ws of smart.ss.repo.workspaces()) for (const id of smart.ss.repo.snapshotIds(ws)) if (id > since) items.push({ ws, id });
+      items.sort((x, y) => (x.id < y.id ? -1 : 1));
+      return send(res, 200, { items: items.slice(0, 200) });
+    }
+    if (u.pathname === '/api/runner/smartsave-ack' && req.method === 'POST') { smart.ss.ackReplica('paired:' + dev.name, b.items); broadcast({ type: 'smartsave' }); return send(res, 200, { ok: true }); }
     if (u.pathname === '/api/runner/update' && req.method === 'POST') {
       let j;
       try { j = jobsMod.report(vault, dev.id, b.id, b); } catch (e) { return send(res, 404, { error: e.message }); }
@@ -758,6 +788,89 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
       return send(res, 200, { ok: true, left: q.length });
     }
 
+    // ---- SmartSave: autosave + recovery ----
+    if (p === '/api/smartsave/status' && m === 'GET') return send(res, 200, { ...smart.ss.status(), metrics: smart.metrics });
+    if (p === '/api/smartsave/settings' && m === 'POST') {
+      if (!localOnly()) return;
+      const b = await json();
+      const cur = conf().smartsave;
+      const next = { ...cur, projects: { ...cur.projects } };
+      if (b.enabled !== undefined) next.enabled = !!b.enabled;
+      for (const k of ['debounceSec', 'intervalSec', 'maxFileMB']) if (b[k] !== undefined) next[k] = Math.max(k === 'maxFileMB' ? 1 : 5, Math.min(k === 'intervalSec' ? 3600 : 500, Number(b[k]) || cur[k]));
+      if (b.project) {
+        const slug = store.resolveProject(b.project.id || b.project.slug);
+        const pc = { ...(next.projects[slug] || {}) };
+        if (b.project.enabled !== undefined) pc.enabled = !!b.project.enabled;
+        if (b.project.root !== undefined) { const r = String(b.project.root || '').trim().replace(/^"|"$/g, ''); if (r && !fs.existsSync(r)) return send(res, 400, { error: `Folder not found: ${r}` }); pc.root = r || undefined; }
+        if (Array.isArray(b.project.exclude)) pc.exclude = b.project.exclude.map(String).slice(0, 100);
+        if (!pc.root && !(store.get('projects/' + slug) || { meta: {} }).meta.folder) return send(res, 400, { error: 'Choose the project folder first' });
+        next.projects[slug] = pc;
+      }
+      settingsMod.save(vault, { ...conf(), smartsave: next });
+      store.log({ agent, action: 'smartsave.settings', summary: `SmartSave settings changed${b.project ? ` for ${b.project.id || b.project.slug}` : ''}` });
+      smart.tick();
+      return send(res, 200, smart.ss.status());
+    }
+    if (p === '/api/smartsave/targets' && m === 'POST') {
+      if (!localOnly()) return;
+      const b = await json();
+      const id = 't-' + require('crypto').randomBytes(4).toString('hex');
+      let t;
+      if (b.type === 'folder') t = { id, type: 'folder', name: String(b.name || 'Backup folder').slice(0, 40), dir: path.resolve(String(b.dir || '').trim().replace(/^"|"$/g, '')) };
+      else if (b.type === 's3') t = { id, type: 's3', name: String(b.name || 'Cloud storage').slice(0, 40), endpoint: String(b.endpoint || '').trim(), bucket: String(b.bucket || '').trim(), region: String(b.region || 'auto').trim(), accessKeyId: String(b.accessKeyId || '').trim(), prefix: String(b.prefix || 'cortex-smartsave').trim() };
+      else return send(res, 400, { error: 'type must be folder or s3 (paired computers protect this one automatically)' });
+      if (t.type === 'folder' && path.resolve(t.dir).startsWith(path.resolve(vault))) return send(res, 400, { error: 'Pick a folder outside the Cortex vault (ideally another drive or a cloud-synced folder).' });
+      try { await require('./smartsave/targets').make(t, { [id]: b.secretAccessKey }).test(); } catch (e) { return send(res, 400, { error: `Could not write to it: ${e.message}` }); }
+      if (b.secretAccessKey) smart.ss.setSecret(id, String(b.secretAccessKey));
+      const cur = conf().smartsave;
+      settingsMod.save(vault, { ...conf(), smartsave: { ...cur, targets: [...cur.targets, t] } });
+      // queue the latest snapshot of every project for the new target
+      const stt = smart.ss.state();
+      for (const [ws, ps] of Object.entries(stt.projects)) if (ps.last) stt.queue.push({ target: id, ws, id: ps.last.id, added: new Date().toISOString() });
+      smart.ss.saveState(stt); smart.kickUpload();
+      store.log({ agent, action: 'smartsave.target', summary: `SmartSave: added backup target "${t.name}" (${t.type})` });
+      return send(res, 201, { id, name: t.name, type: t.type });
+    }
+    if (p === '/api/smartsave/targets' && m === 'DELETE') {
+      if (!localOnly()) return;
+      const id = u.searchParams.get('id');
+      const cur = conf().smartsave;
+      settingsMod.save(vault, { ...conf(), smartsave: { ...cur, targets: cur.targets.filter((t) => t.id !== id) } });
+      smart.ss.setSecret(id, null);
+      return send(res, 200, { ok: true });
+    }
+    if (p === '/api/smartsave/preview' && m === 'GET') { try { return send(res, 200, smart.ss.preview(store.resolveProject(u.searchParams.get('project')))); } catch (e) { return send(res, 400, { error: e.message }); } }
+    if (p === '/api/smartsave/save' && m === 'POST') {
+      const b = await json();
+      const slug = store.resolveProject(b.project);
+      if (!smart.ss.enabledProjects().includes(slug)) return send(res, 400, { error: 'SmartSave is not turned on for this project' });
+      let r; try { r = smart.ss.checkpoint(slug, { reason: 'saved by you', force: true }); } catch (e) { return send(res, e.code === 'BUSY' ? 409 : 400, { error: e.message }); }
+      smart.kickUpload(); broadcast({ type: 'smartsave' });
+      return send(res, 200, r);
+    }
+    if (p === '/api/smartsave/snapshots' && m === 'GET') {
+      const slug = store.resolveProject(u.searchParams.get('project'));
+      const from = u.searchParams.get('from') || 'local';
+      if (from === 'local') return send(res, 200, { from, snapshots: smart.ss.snapshots(slug, { limit: Math.min(200, Number(u.searchParams.get('limit')) || 30) }) });
+      try { return send(res, 200, { from, ids: (await smart.ss.remoteSnapshots(from, slug)).slice(0, 100) }); } catch (e) { return send(res, 400, { error: e.message }); }
+    }
+    if (p === '/api/smartsave/restore' && m === 'POST') {
+      if (!localOnly()) return;
+      const b = await json();
+      const slug = store.resolveProject(b.project);
+      try {
+        if (b.from && b.from !== 'local') await smart.ss.fetchFrom(b.from, slug, b.id);
+        const root = smart.ss.projectRoot(slug) || path.join(os.homedir(), slug);
+        const dest = b.dest ? path.resolve(String(b.dest)) : `${root.replace(/[\/]+$/, '')}-restored-${String(b.id).slice(0, 9)}`;
+        if (b.preview) return send(res, 200, { dest, ...smart.ss.diff(slug, b.id, dest) });
+        const r = smart.ss.restore(slug, b.id, { dest, overwrite: !!b.overwrite });
+        store.log({ agent, action: 'smartsave.restore', summary: `SmartSave: restored ${slug} (${b.id}) into ${dest}: ${r.written} files written, ${r.conflicts.length} conflicts`, project: slug });
+        return send(res, 200, r);
+      } catch (e) { return send(res, 400, { error: e.message }); }
+    }
+    if (p === '/api/smartsave/recovery-key' && m === 'GET') { if (!localOnly()) return; return send(res, 200, { key: smart.ss.recoveryKey() }); }
+    if (p === '/api/smartsave/prune' && m === 'POST') { if (!localOnly()) return; const b = await json(); try { return send(res, 200, smart.ss.prune({ dryRun: b.dryRun !== false })); } catch (e) { return send(res, 409, { error: e.message }); } }
+
     // ---- devices ----
     if (p === '/api/devices' && m === 'GET') return send(res, 200, { devices: require('./devices').list(vault) });
     if (p === '/api/devices/code' && m === 'POST') {
@@ -784,7 +897,9 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
       const dev = b.device && b.device !== 'local' ? devs.find((d) => d.id === b.device && d.kind === 'computer') : null;
       if (b.device && b.device !== 'local' && !dev) return send(res, 400, { error: 'That computer is not paired.' });
       try {
-        const j = jobsMod.create(vault, { device: dev ? dev.id : 'local', deviceName: dev ? dev.name : 'This computer', tool: b.tool || 'claude', model: b.model, prompt: b.prompt, project: b.project ? store.resolveProject(b.project) : undefined, task: b.task, from: agent });
+        const restore = b.restore && /^[\w-]{1,80}$/.test(String(b.restore.id || '')) ? { ws: store.resolveProject(b.restore.project || b.project), id: String(b.restore.id) } : undefined;
+        if (restore && !dev) return send(res, 400, { error: 'Continuing on another computer needs a paired computer.' });
+        const j = jobsMod.create(vault, { device: dev ? dev.id : 'local', deviceName: dev ? dev.name : 'This computer', tool: b.tool || 'claude', model: b.model, prompt: b.prompt || (restore ? 'Continue the unfinished work in this folder. Read CORTEX-RESTORE.md first: it says what was being done, then carry on and report what you finished.' : ''), project: b.project ? store.resolveProject(b.project) : undefined, task: b.task, from: agent, restore });
         store.log({ agent, action: 'agent.launch', summary: `Asked ${j.deviceName} to run ${j.tool === 'codex' ? 'Codex' : 'Claude Code'}: ${String(j.prompt || j.task).slice(0, 120)}`, project: j.project, ref: j.id });
         if (j.device === 'local') startLocalJob(j);
         return send(res, 201, jobsMod.get(vault, j.id));

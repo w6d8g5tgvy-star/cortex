@@ -11,7 +11,9 @@ const SETTINGS = path.join(os.homedir(), '.claude', 'settings.json');
 const SKILL_SRC = path.resolve(__dirname, '..', 'integrations', 'claude-code', 'SKILL.md');
 const SKILL_DEST = path.join(os.homedir(), '.claude', 'skills', 'cortex', 'SKILL.md');
 // Documented Claude Code hook events. Timeouts are in seconds.
-const EVENTS = { SessionStart: 20, UserPromptSubmit: 20, PostToolUse: 10, Notification: 10, PermissionRequest: 150, Stop: 20, SessionEnd: 5 };
+// PreCompact / StopFailure / SessionEnd also let SmartSave checkpoint the project before context is compacted, when a
+// rate or output-token limit stops the agent, and when the session ends (zero AI tokens).
+const EVENTS = { SessionStart: 20, UserPromptSubmit: 20, PostToolUse: 10, Notification: 10, PermissionRequest: 150, Stop: 20, SessionEnd: 10, PreCompact: 15, StopFailure: 15 };
 const MATCHER = { PostToolUse: '*' };
 const MARK = 'cortex.js" hook';
 
@@ -312,6 +314,19 @@ async function runHook(input, vault) {
   const model = models.cleanModelName(typeof input.model === 'string' ? input.model : input.model && (input.model.id || input.model.display_name))
     || (existing && existing.model)
     || models.claudeModelFromTranscript(input.transcript_path);
+
+  // ---- SmartSave (only when the user turned it on; ordinary saves never call an AI) ----
+  try {
+    const smart = require('./smartsave/service');
+    if (ev === 'PostToolUse' && (CHANGE_TOOLS.has(input.tool_name) || input.tool_name === 'Bash')) smart.hookTrigger(vault, { reason: 'files changed', cwd: input.cwd, urgent: false, session: id });
+    if (ev === 'PreCompact') smart.hookTrigger(vault, { reason: `before context compaction${input.trigger ? ` (${input.trigger})` : ''}`, cwd: input.cwd, urgent: true, session: id });
+    if (ev === 'StopFailure') smart.hookTrigger(vault, { reason: `agent stopped: ${String(input.error || input.reason || input.stop_reason || 'failure').slice(0, 60)}`, cwd: input.cwd, urgent: true, session: id });
+    if (ev === 'SessionEnd') smart.hookTrigger(vault, { reason: `session ended${input.reason ? ` (${input.reason})` : ''}`, cwd: input.cwd, urgent: true, session: id });
+  } catch { /* never break the agent */ }
+  if (ev === 'PreCompact' || ev === 'StopFailure') {
+    if (existing) sessions.upsert(vault, id, { step: ev === 'PreCompact' ? 'Compacting context (SmartSave checkpoint saved)' : `Stopped: ${String(input.error || input.reason || 'limit reached').slice(0, 120)}` }, { kind: 'status', text: ev === 'PreCompact' ? '💾 Checkpoint before context compaction' : `⛔ ${String(input.error || input.reason || 'Stopped').slice(0, 160)}` });
+    return null;
+  }
 
   if (ev === 'SessionStart') {
     const ctx = sessionContext(vault, input.cwd, input.source);
