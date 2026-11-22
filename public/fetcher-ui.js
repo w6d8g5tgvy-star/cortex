@@ -306,3 +306,31 @@
   style.textContent = css;
   document.head.appendChild(style);
 })();
+
+
+// ---------- quarantined lesson techniques: review panel on the Fetcher page ----------
+(() => {
+  const orig = window.renderFetcher;
+  if (typeof orig !== 'function') return;
+  window.renderFetcher = async function (...a) {
+    const r = await orig.apply(this, a);
+    try {
+      if (S.route[0] !== 'fetcher' || document.getElementById('qz-panel')) return r;
+      const d = await api('/api/lessons/quarantine');
+      const n = d.lessons.reduce((s, l) => s + l.items.length, 0);
+      if (!n) return r;
+      const head = document.querySelector('#main .page-head');
+      const p = document.createElement('div');
+      p.className = 'panel warn-panel'; p.id = 'qz-panel'; p.style.marginBottom = '16px';
+      p.innerHTML = `<h3>⚠ ${n} technique${n === 1 ? '' : 's'} blocked by the safety check</h3><p class="small muted" style="margin-top:0">Fetcher keeps advice away from agents when it looks like an attempt to steer them, leak secrets, or run something dangerous. Review it here: approve it (agents then see it marked "ask the user first") or discard it.</p>` +
+        d.lessons.map((l) => l.items.map((t) => `<div class="jb" style="display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid var(--edge);border-radius:12px;margin-top:8px"><div style="flex:1;min-width:0"><b>${esc(t.name)}</b> <span class="small muted">in ${esc(l.title)}</span><div class="small" style="margin:4px 0">${esc(String(t.do || '').slice(0, 400))}</div><div class="small" style="color:var(--warn)">Why blocked: ${esc(t.reasons.join(', ') || 'unknown')}</div>${t.sources.length ? `<div class="small muted">From: ${t.sources.map((s) => `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title)}</a>`).join(', ')}</div>` : ''}</div><div style="display:flex;gap:6px;flex-shrink:0"><button class="btn sm" data-qz="approve" data-id="${esc(l.id)}" data-name="${esc(t.name)}">Approve</button><button class="btn sm danger" data-qz="discard" data-id="${esc(l.id)}" data-name="${esc(t.name)}">Discard</button></div></div>`).join('')).join('');
+      if (document.getElementById('qz-panel') || S.route[0] !== 'fetcher') return r; // a second render finished first
+      if (head && head.nextSibling) head.parentNode.insertBefore(p, head.nextSibling); else document.querySelector('#main').prepend(p);
+      p.querySelectorAll('[data-qz]').forEach((b) => (b.onclick = async () => {
+        if (b.dataset.qz === 'approve' && !confirm('Approve this technique? Agents will see it, marked "ask the user first".')) return;
+        try { await api('/api/lessons/quarantine', { method: 'POST', body: { id: b.dataset.id, name: b.dataset.name, action: b.dataset.qz } }); toast(b.dataset.qz === 'approve' ? 'Approved' : 'Discarded'); p.remove(); window.renderFetcher(); } catch (e) { fail(e); }
+      }));
+    } catch (e) { console.warn('quarantine panel', e); }
+    return r;
+  };
+})();

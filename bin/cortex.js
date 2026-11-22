@@ -42,6 +42,8 @@ Usage:
   cortex instructions     Add the Cortex prompt to ~/.claude/CLAUDE.md and ~/.codex/AGENTS.md (uninstall to remove)
   cortex setup            Connect Cortex to all your AI apps, enable phone access, start at login
   cortex update           Check for an update and install it
+  cortex runner           Let this computer run agent jobs for your main Cortex
+                          (first time: --hub <main Cortex address> --code <code> --folder <dir>)
   cortex help             Show this help
 
 Options:
@@ -112,6 +114,13 @@ ${remote ? `    Phone      ${lanAddresses(port).map((a) => a.url).join('  ') || 
 
 async function main() {
   if (cmd === 'help' || has('help') || has('h')) return console.log(HELP);
+
+  if (cmd === 'runner') {
+    const folders = args.map((x, i) => (x === '--folder' ? args[i + 1] : null)).filter(Boolean);
+    try { await require('../src/runner-client').start({ hub: flag('hub'), code: flag('code'), name: flag('name'), folders, once: has('once') }); }
+    catch (e) { console.error('✗ ' + e.message); process.exit(1); }
+    return;
+  }
 
   if (cmd === 'mcp') {
     const { Store } = require('../src/store');

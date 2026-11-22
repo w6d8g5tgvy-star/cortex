@@ -257,7 +257,7 @@ class AgentRunner {
 
   running() { return [...this.procs.keys()]; }
 
-  launch({ tool = 'claude', prompt, cwd, permission = 'acceptEdits', maxMinutes = 120, project, task, resume, continues, from, model }) {
+  launch({ tool = 'claude', prompt, cwd, permission = 'acceptEdits', maxMinutes = 120, project, task, resume, continues, from, model, briefText }) {
     const t = TOOLS[tool];
     if (!t) throw new Error(`Unknown agent tool "${tool}"`);
     model = cleanModel(model);
@@ -269,7 +269,8 @@ class AgentRunner {
     const id = 'run-' + crypto.randomBytes(5).toString('hex');
     const hooks = tool === 'claude' && claudeHooks.status().installed;
     // Every launched agent gets the Cortex brief: standing + project instructions, open tasks, memories, rules.
-    const b = resume ? { text: prompt, project, task } : brief.buildBrief(this.store, { project, task, assignment: prompt, runId: id });
+    // briefText: a job from another computer's Cortex arrives with that Cortex's brief already built.
+    const b = resume ? { text: prompt, project, task } : briefText ? { text: String(briefText), project, task } : brief.buildBrief(this.store, { project, task, assignment: prompt, runId: id });
     const taskRec = b.task ? this.store.get(b.task) : null;
     const title = (prompt || (taskRec && taskRec.title) || '').replace(/\s+/g, ' ').slice(0, 140);
     let args;

@@ -480,6 +480,39 @@ function buildTools(store) {
       },
     },
     {
+      name: 'agent_launch',
+      description: 'Ask to start Claude Code or Codex on one of the user\'s computers (this computer, or a paired one by name) to do a piece of work. The request waits for the user\'s approval in Cortex (Agents page or phone) unless they turned on auto-approve. Use it to hand off work that needs a real coding agent in a project folder. Check progress with agent_jobs.',
+      inputSchema: { type: 'object', required: ['prompt'], properties: { prompt: str('What the agent should do, in plain words'), project: str('Project slug or title (its folder is used on that computer)'), task: str('Task id or title it is for (optional)'), computer: str('Which computer: "this computer" (default) or a paired computer\'s name'), tool: str('claude (default) or codex', { enum: ['claude', 'codex'] }), model: str('Model (optional), e.g. claude-sonnet-5-5') } },
+      run: (a, ctx) => {
+        const jobs = require('./jobs');
+        const conf = settings.load(store.vault).agents;
+        if (!conf.enabled) throw new Error('Starting agents is turned off on the main computer (Settings → Agent control).');
+        let device = 'local'; let deviceName = 'This computer';
+        const want = String(a.computer || '').trim().toLowerCase();
+        if (want && !['this computer', 'local', 'this', 'here'].includes(want)) {
+          const c = require('./devices').list(store.vault).filter((d) => d.kind === 'computer');
+          const d = c.find((x) => x.name.toLowerCase() === want) || c.find((x) => x.name.toLowerCase().includes(want));
+          if (!d) throw new Error(`No paired computer called "${a.computer}". Paired computers: ${c.map((x) => x.name).join(', ') || 'none'}.`);
+          device = d.id; deviceName = d.name;
+        }
+        const task = a.task ? store.must(a.task).id : undefined;
+        const j = jobs.create(store.vault, { device, deviceName, tool: a.tool || 'claude', model: a.model, prompt: a.prompt, project: a.project ? store.resolveProject(a.project) : undefined, task, from: ctx.agent, needsApproval: conf.autoApproveAgentLaunch !== true });
+        store.log({ agent: ctx.agent, action: 'agent.launch.request', summary: `Asked to run ${j.tool === 'codex' ? 'Codex' : 'Claude Code'} on ${deviceName}: ${String(j.prompt).slice(0, 120)}`, project: j.project, ref: j.id });
+        return { id: j.id, status: j.status, computer: deviceName, message: j.status === 'needs-approval' ? 'Sent to the user for approval (Cortex → Agents, or their phone). Check with agent_jobs.' : 'Queued.' };
+      },
+    },
+    {
+      name: 'agent_jobs',
+      description: 'Status of agent jobs started through Cortex (on this or paired computers): waiting for approval, queued, running, done, failed; with the latest step and result.',
+      inputSchema: { type: 'object', properties: { id: str('Job id (optional)') } },
+      run: (a) => {
+        const jobs = require('./jobs');
+        const view = ({ key, ...j }) => ({ id: j.id, status: j.status, computer: j.deviceName, tool: j.tool, prompt: String(j.prompt || '').slice(0, 200), step: j.step, result: j.result ? String(j.result).slice(0, 1500) : undefined, created: j.created });
+        if (a.id) { const j = jobs.get(store.vault, a.id); if (!j) throw new Error('Unknown job id'); return view(j); }
+        return jobs.list(store.vault, { limit: 10 }).map(view);
+      },
+    },
+    {
       name: 'experience_digest',
       description: 'What earlier agent sessions on a project learned the hard way, worked out from its agent journal for free: files changed most, fail → fix pairs, recurring trouble, and who saves what they learn. Read it before starting work; turn real patterns into memory_write rules.',
       inputSchema: { type: 'object', required: ['project'], properties: { project: str('Project slug or title') } },

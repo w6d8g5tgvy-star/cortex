@@ -10,6 +10,7 @@ const { monitorEventLoopDelay } = require('perf_hooks');
 const { createMcp, VERSION } = require('./mcp');
 const { snippets } = require('./snippets');
 const sessions = require('./sessions');
+const brief = require('./brief');
 const settingsMod = require('./settings');
 const screen = require('./screen');
 const winmod = require('./windows');
@@ -200,8 +201,12 @@ function startServer({ store, port, host, token: cliToken }) {
     if (isLocal(req)) return true;
     const h = req.headers.authorization || '';
     if (allowConnector && h.startsWith('Bearer ') && tokenOk(h.slice(7), conf().connector.token)) return true;
-    return tokenOk(h.startsWith('Bearer ') ? h.slice(7) : '') || tokenOk(u.searchParams.get('token')) || tokenOk(cookieToken(req));
+    if (tokenOk(h.startsWith('Bearer ') ? h.slice(7) : '') || tokenOk(u.searchParams.get('token')) || tokenOk(cookieToken(req))) return true;
+    const d = deviceFor(req, u);
+    return !!(d && d.kind === 'phone');
   };
+  const deviceToken = (req, u) => { const h = req.headers.authorization || ''; return (h.startsWith('Bearer ') ? h.slice(7) : '') || u.searchParams.get('token') || cookieToken(req); };
+  const deviceFor = (req, u) => { try { return require('./devices').authenticate(vault, deviceToken(req, u), { platform: req.headers['x-cortex-platform'], version: req.headers['x-cortex-version'] }); } catch { return null; } };
   const requestRestart = () => {
     if (!process.env.CORTEX_SUPERVISED) return false;
     broadcast({ type: 'restarting' });
@@ -292,6 +297,88 @@ function startServer({ store, port, host, token: cliToken }) {
   }
 
   // ---------- REST API ----------
+  // ---------- devices: pairing ----------
+  async function handlePair(req, res, u) {
+    const b = JSON.parse((await readBody(req)) || '{}');
+    let r;
+    try { r = require('./devices').redeem(vault, b.code, { name: b.name, platform: b.platform, version: b.version, ip: req.socket.remoteAddress }); } catch (e) { return send(res, 400, { error: e.message }); }
+    store.log({ agent: 'you', action: 'device.paired', summary: `Paired ${r.device.kind === 'computer' ? 'computer' : 'phone'} "${r.device.name}"` });
+    broadcast({ type: 'devices' });
+    if (r.device.kind === 'phone') return send(res, 200, { device: r.device }, { 'Set-Cookie': `cortex_token=${encodeURIComponent(r.token)}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict` });
+    return send(res, 200, { device: r.device, token: r.token });
+  }
+  function sendPairPage(res, u) {
+    const code = String(u.searchParams.get('code') || '').replace(/[^A-Za-z0-9-]/g, '').slice(0, 12);
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Pair with Cortex</title>
+<body style="font:16px system-ui;margin:0;min-height:100vh;display:grid;place-items:center;background:radial-gradient(circle at 30% 20%,#1b1440,#05060d 60%);color:#e7e9f2">
+<form id="f" style="width:min(360px,90vw);padding:28px;border-radius:18px;background:rgba(255,255,255,.04);border:1px solid rgba(124,160,255,.25)">
+<h2 style="margin:0 0 6px">Pair this phone with Cortex</h2><p style="margin:0 0 18px;color:#9aa3c7;font-size:14px">Enter the code shown on your computer (Settings → Devices). Codes work once and last 10 minutes.</p>
+<label style="font-size:13px;color:#9aa3c7">Pairing code</label><input id="c" value="${code}" autocomplete="one-time-code" style="width:100%;box-sizing:border-box;font:600 22px ui-monospace,monospace;letter-spacing:3px;padding:12px;margin:6px 0 14px;border-radius:10px;border:1px solid #3a4170;background:#0b0d1a;color:#fff;text-transform:uppercase">
+<label style="font-size:13px;color:#9aa3c7">Name for this phone</label><input id="n" value="My phone" style="width:100%;box-sizing:border-box;font:16px system-ui;padding:12px;margin:6px 0 18px;border-radius:10px;border:1px solid #3a4170;background:#0b0d1a;color:#fff">
+<button style="width:100%;padding:14px;border:0;border-radius:12px;font:600 16px system-ui;color:#fff;background:linear-gradient(90deg,#8b6bff,#47e3ff)">Pair</button><p id="m" style="min-height:22px;color:#ff8c8c;font-size:14px"></p></form>
+<script>document.getElementById('f').onsubmit=async(e)=>{e.preventDefault();const m=document.getElementById('m');m.style.color='#9aa3c7';m.textContent='Pairing…';
+const r=await fetch('/api/pair',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:document.getElementById('c').value,name:document.getElementById('n').value,platform:navigator.platform})});
+const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textContent='Paired! Opening Cortex…';setTimeout(()=>location.href='/#/live',600)}else{m.style.color='#ff8c8c';m.textContent=j.error||'Could not pair'}}</script>`);
+  }
+
+  // ---------- agent jobs (phone launches, agent requests, paired computers) ----------
+  const jobsMod = require('./jobs');
+  const jobBrief = (j) => brief.buildBrief(store, { project: j.project, task: j.task, assignment: j.prompt, runId: j.id }).text;
+  function startLocalJob(j) {
+    const s = conf().agents;
+    if (!s.enabled) return jobsMod.patch(vault, j.id, { status: 'error', step: 'Starting agents is turned off (Settings → Agent control on your computer).' });
+    const proj = j.project ? store.get('projects/' + j.project) : null;
+    const cwd = (proj && proj.meta.folder && agents.folderAllowed(proj.meta.folder, s.folders) && proj.meta.folder) || s.folders[0];
+    if (!cwd || !agents.folderAllowed(cwd, s.folders)) return jobsMod.patch(vault, j.id, { status: 'error', step: 'Add an allowed folder first (Settings → Agent control).' });
+    try {
+      const pick = agents.pickAgent(proj && proj.meta, j.tool, j.model);
+      const r = runner.launch({ ...pick, prompt: j.prompt, cwd, permission: s.permission, maxMinutes: s.maxMinutes, project: j.project, task: j.task, from: j.from });
+      store.log({ agent: j.from, action: 'agent.start', summary: `Started ${pick.tool === 'codex' ? 'Codex' : 'Claude Code'} on this computer: ${String(j.prompt || j.task || '').slice(0, 120)}`, project: j.project, ref: j.id });
+      broadcast({ type: 'live' });
+      return jobsMod.patch(vault, j.id, { status: 'running', runId: r.id, step: 'Running on this computer', startedAt: new Date().toISOString() });
+    } catch (e) { return jobsMod.patch(vault, j.id, { status: 'error', step: e.message }); }
+  }
+  function tickJobs() {
+    for (const j of jobsMod.list(vault, { limit: 100 })) {
+      try {
+        if (j.device === 'local' && j.status === 'queued') startLocalJob(j);
+        else if (j.device === 'local' && j.status === 'running' && j.runId) {
+          if (j.stopRequested && runner.running().includes(j.runId)) runner.stop(j.runId);
+          const sx = sessions.get(vault, j.runId);
+          if (sx && sx.status !== 'working') jobsMod.patch(vault, j.id, { status: j.stopRequested ? 'stopped' : sx.status === 'error' ? 'error' : 'done', step: sx.step, result: sx.result, cost_usd: sx.cost_usd, finishedAt: new Date().toISOString() });
+        } else if (j.device !== 'local' && j.status === 'running' && Date.now() - Date.parse(j.updated || j.startedAt) > 15 * 60000) {
+          jobsMod.patch(vault, j.id, { status: 'error', step: `Lost contact with ${j.deviceName} (no update for 15 minutes)` });
+        }
+      } catch { /* one bad job must not stop the rest */ }
+    }
+  }
+  setInterval(tickJobs, 3000).unref();
+
+  async function handleRunner(req, res, u, dev) {
+    const b = req.method === 'POST' ? JSON.parse((await readBody(req)) || '{}') : {};
+    if (u.pathname === '/api/runner/next' && req.method === 'POST') {
+      const j = jobsMod.claimNext(vault, dev.id);
+      if (!j) return send(res, 200, { job: null });
+      sessions.upsert(vault, j.id, { agent: j.tool === 'codex' ? 'codex' : 'claude-code', title: String(j.prompt || j.task).slice(0, 140), status: 'working', step: `Starting on ${dev.name}…`, workspace: dev.name, launched: true, tool: j.tool, project: j.project, task: j.task, device: dev.name, from: j.from });
+      broadcast({ type: 'live' });
+      return send(res, 200, { job: { id: j.id, tool: j.tool, model: j.model, prompt: j.prompt, project: j.project, task: j.task, brief: jobBrief(j) } });
+    }
+    if (u.pathname === '/api/runner/update' && req.method === 'POST') {
+      let j;
+      try { j = jobsMod.report(vault, dev.id, b.id, b); } catch (e) { return send(res, 404, { error: e.message }); }
+      const done = ['done', 'error', 'stopped'].includes(j.status);
+      sessions.upsert(vault, j.id, { status: done ? (j.status === 'error' ? 'error' : 'done') : 'working', step: j.step, ...(j.result ? { result: j.result } : {}), ...(j.cost_usd ? { cost_usd: j.cost_usd } : {}) }, done ? { kind: 'status', text: `${j.status === 'done' ? '✓ Finished' : j.status === 'stopped' ? '■ Stopped' : '✗ ' + j.step} on ${dev.name}` } : undefined);
+      if (done && !j.recorded) {
+        try { brief.recordOutcome(store, { project: j.project, task: j.task, agent: j.tool === 'codex' ? 'codex' : 'claude-code', prompt: j.prompt, status: j.status === 'done' ? 'done' : j.status, result: j.result || j.step, runId: j.id }); } catch { /* best effort */ }
+        jobsMod.patch(vault, j.id, { recorded: true });
+      }
+      broadcast({ type: 'live' });
+      return send(res, 200, { ok: true, stop: !!j.stopRequested });
+    }
+    return send(res, 404, { error: 'Not found' });
+  }
+
   async function handleApi(req, res, u) {
     const p = u.pathname;
     const m = req.method;
@@ -645,6 +732,75 @@ function startServer({ store, port, host, token: cliToken }) {
       return send(res, 201, { command: c });
     }
 
+    // ---- lessons the safety check quarantined: review, approve (served with an "ask the user first" mark) or discard ----
+    if (p === '/api/lessons/quarantine' && m === 'GET') {
+      store.scan(false); // lessons may have been written by another process (an agent's own Cortex connection)
+      const out = [];
+      for (const r of store.list('note').filter((n) => n.meta.fetcher_quarantine)) {
+        let q = []; try { q = JSON.parse(r.meta.fetcher_quarantine); } catch { q = []; }
+        if (q.length) out.push({ id: r.id, title: r.title, items: q.map((t) => ({ name: t.name, when: t.when, do: t.do, reasons: t.safety_reasons || [], sources: (t.sources || []).map((x) => ({ title: x.title, url: x.url })) })) });
+      }
+      return send(res, 200, { lessons: out });
+    }
+    if (p === '/api/lessons/quarantine' && m === 'POST') {
+      const b = await json();
+      const r = store.must(b.id);
+      let q = []; let act = [];
+      try { q = JSON.parse(r.meta.fetcher_quarantine || '[]'); act = JSON.parse(r.meta.fetcher_lesson || '[]'); } catch { return send(res, 400, { error: 'Unreadable lesson' }); }
+      const t = q.find((x) => x.name === b.name);
+      if (!t) return send(res, 404, { error: 'Technique not found' });
+      q = q.filter((x) => x !== t);
+      if (b.action === 'approve') {
+        act.push({ ...t, approved: true, safety: 'ask' });
+        store.update(r.id, { fetcher_lesson: JSON.stringify(act), fetcher_quarantine: JSON.stringify(q), append: `> **${new Date().toISOString().slice(0, 10)}:** you approved the quarantined technique "${t.name}". Agents see it marked "ask the user first".` });
+      } else store.update(r.id, { fetcher_quarantine: JSON.stringify(q) });
+      store.log({ agent, action: b.action === 'approve' ? 'lesson.approved' : 'lesson.discarded', summary: `${b.action === 'approve' ? 'Approved' : 'Discarded'} quarantined technique "${t.name}" in ${r.title}`, ref: r.id });
+      return send(res, 200, { ok: true, left: q.length });
+    }
+
+    // ---- devices ----
+    if (p === '/api/devices' && m === 'GET') return send(res, 200, { devices: require('./devices').list(vault) });
+    if (p === '/api/devices/code' && m === 'POST') {
+      if (!localOnly()) return;
+      const b = await json();
+      try {
+        const c = require('./devices').createCode(vault, { kind: b.kind, name: b.name });
+        const host = req.headers.host;
+        return send(res, 201, { ...c, phoneUrl: `/pair?code=${encodeURIComponent(c.code)}`, runnerCommand: `node bin/cortex.js runner --hub <this Cortex's address> --code ${c.code}`, host });
+      } catch (e) { return send(res, 400, { error: e.message }); }
+    }
+    if (p === '/api/devices/rename' && m === 'POST') { if (!localOnly()) return; const b = await json(); try { return send(res, 200, require('./devices').rename(vault, b.id, b.name)); } catch (e) { return send(res, 404, { error: e.message }); } }
+    if (p === '/api/devices/revoke' && m === 'POST') {
+      if (!localOnly()) return;
+      const b = await json();
+      try { const d = require('./devices').revoke(vault, b.id); store.log({ agent, action: 'device.removed', summary: `Removed ${d.kind} "${d.name}"` }); broadcast({ type: 'devices' }); return send(res, 200, d); } catch (e) { return send(res, 404, { error: e.message }); }
+    }
+    // ---- agent jobs: start Claude Code / Codex on this computer or a paired one ----
+    if (p === '/api/jobs' && m === 'GET') return send(res, 200, { jobs: jobsMod.list(vault, { limit: 40 }).map(({ key, ...j }) => j), computers: [{ id: 'local', name: 'This computer', online: true }, ...require('./devices').list(vault).filter((d) => d.kind === 'computer').map((d) => ({ id: d.id, name: d.name, online: d.online, lastSeen: d.lastSeen }))] });
+    if (p === '/api/jobs' && m === 'POST') {
+      const b = await json();
+      if (!conf().agents.enabled) return send(res, 403, { error: 'Starting agents is turned off. Turn it on in Settings → Agent control on your computer.' });
+      const devs = require('./devices').list(vault);
+      const dev = b.device && b.device !== 'local' ? devs.find((d) => d.id === b.device && d.kind === 'computer') : null;
+      if (b.device && b.device !== 'local' && !dev) return send(res, 400, { error: 'That computer is not paired.' });
+      try {
+        const j = jobsMod.create(vault, { device: dev ? dev.id : 'local', deviceName: dev ? dev.name : 'This computer', tool: b.tool || 'claude', model: b.model, prompt: b.prompt, project: b.project ? store.resolveProject(b.project) : undefined, task: b.task, from: agent });
+        store.log({ agent, action: 'agent.launch', summary: `Asked ${j.deviceName} to run ${j.tool === 'codex' ? 'Codex' : 'Claude Code'}: ${String(j.prompt || j.task).slice(0, 120)}`, project: j.project, ref: j.id });
+        if (j.device === 'local') startLocalJob(j);
+        return send(res, 201, jobsMod.get(vault, j.id));
+      } catch (e) { return send(res, e.code === 'DUPLICATE' ? 409 : 400, { error: e.message, job: e.job && e.job.id }); }
+    }
+    if (p === '/api/jobs/approve' && m === 'POST') {
+      const b = await json();
+      try {
+        const j = b.reject ? jobsMod.reject(vault, b.id) : jobsMod.approve(vault, b.id);
+        store.log({ agent, action: b.reject ? 'agent.launch.declined' : 'agent.launch.approved', summary: `${b.reject ? 'Declined' : 'Approved'} agent job: ${String(j.prompt || j.task).slice(0, 120)}`, project: j.project, ref: j.id });
+        if (!b.reject && j.device === 'local' && j.status === 'queued') startLocalJob(j);
+        return send(res, 200, jobsMod.get(vault, j.id));
+      } catch (e) { return send(res, 404, { error: e.message }); }
+    }
+    if (p === '/api/jobs/stop' && m === 'POST') { const b = await json(); try { const j = jobsMod.requestStop(vault, b.id); if (j.device === 'local' && j.runId) runner.stop(j.runId); return send(res, 200, j); } catch (e) { return send(res, 404, { error: e.message }); } }
+
     // ---- agent control ----
     if (p === '/api/agents' && m === 'GET') {
       const s = conf().agents;
@@ -871,6 +1027,13 @@ function startServer({ store, port, host, token: cliToken }) {
       if (u.pathname === '/mcp') {
         if (!authorized(req, u, true)) return send(res, 401, { error: 'Unauthorized' }, { 'WWW-Authenticate': 'Bearer' });
         return await handleMcp(req, res);
+      }
+      if (u.pathname === '/api/pair' && req.method === 'POST') return await handlePair(req, res, u);
+      if (u.pathname === '/pair' && req.method === 'GET') return sendPairPage(res, u);
+      if (u.pathname.startsWith('/api/runner/')) {
+        const dev = deviceFor(req, u);
+        if (!dev || dev.kind !== 'computer') return send(res, 401, { error: 'This computer is not paired with Cortex (or was removed). Pair it again with a new code.' });
+        return await handleRunner(req, res, u, dev);
       }
       if (u.pathname.startsWith('/api/')) {
         if (!authorized(req, u)) return send(res, 401, { error: 'Not paired: scan the QR code in Cortex → Settings → Phone access' });
