@@ -818,6 +818,7 @@ class Fetcher {
     this.save(job);
     this.store.log({ agent: from, action: 'fetcher.request', summary: `${needsOk ? 'Asked to research' : 'Research started'}: ${topic}${why ? ` (${clip(why, 100)})` : ''}`, project: job.project || FETCHER_PROJECT });
     this.card(job);
+    if (needsOk) { try { require('./notify').add(this.vault, { kind: 'approval', title: `${from} asked Fetcher to research "${clip(topic, 80)}"`, body: why || '', ref: id, project: job.project }); } catch { /* optional */ } }
     if (taskRec) tf.noteOnTask(this.store, taskRec.id, `${from} asked to research "${topic}"${why ? ` (${clip(why, 160)})` : ''}. ${needsOk ? '**Waiting for your OK**: approve or decline it in this task.' : 'Started (auto-run is on).'} (${id})`);
     if (!needsOk && start) this.start(id);
     return job;

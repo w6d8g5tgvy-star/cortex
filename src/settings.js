@@ -13,6 +13,10 @@ const DEFAULTS = () => ({
   connector: { token: '', tunnel: false, provider: 'cloudflare', lastUrl: '' },
   search: { semantic: true, model: 'nomic-embed-text' },
   backups: { daily: true },
+  routing: { mode: 'suggest', tool: 'claude', model: '', never: [] },
+  qa: { block: false },
+  notifications: { off: [], browser: true },
+  ui: { mode: 'advanced', hidePanels: [] },
   smartsave: { enabled: false, debounceSec: 15, intervalSec: 120, maxFileMB: 25, projects: {}, targets: [], retention: { keepLast: 20, hourly: 48, daily: 30, weekly: 26 }, device: '' },
   fetcher: { maxVideos: 5, team: 3, model: 'sonnet', plannerModel: 'haiku', reviewer: 'claude', codexModel: '', threshold: 60, autoRunAgentRequests: false, usage: 'medium', perRunBudget: 0.25, dailyBudget: 1 },
 });

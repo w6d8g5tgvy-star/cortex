@@ -50,7 +50,9 @@ function create(vault, { device = 'local', deviceName, tool = 'claude', model, p
     status: needsApproval ? 'needs-approval' : 'queued', step: needsApproval ? `Waiting for your OK (asked by ${from})` : 'Queued',
     created: new Date().toISOString(),
   };
-  return save(vault, j);
+  save(vault, j);
+  if (needsApproval) { try { require('./notify').add(vault, { kind: 'approval', title: `${from} wants to start ${tool === 'codex' ? 'Codex' : 'Claude Code'} on ${j.deviceName}`, body: prompt.slice(0, 200), ref: j.id, project }); } catch { /* optional */ } }
+  return j;
 }
 
 function patch(vault, id, p) { const j = get(vault, id); if (!j) throw new Error('Job not found'); Object.assign(j, p, { updated: new Date().toISOString() }); return save(vault, j); }

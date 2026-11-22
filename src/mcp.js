@@ -199,7 +199,14 @@ function buildTools(store) {
         const patch = { ...rest, ...modelStamp(ctx) };
         if (description !== undefined) patch.body = description;
         if (append_note) patch.append = `**${new Date().toISOString().slice(0, 16).replace('T', ' ')} · ${ctx.agent}${ctx.model ? ` (${ctx.model})` : ''}:** ${append_note}`;
-        const r = store.update(id, patch);
+        const before = store.must(id).meta.status;
+        let r = store.update(id, patch);
+        if (a.status === 'done' && before !== 'done' && r && r.kind === 'task') {
+          try {
+            if (global.__cortexRunQa) r = global.__cortexRunQa(r, String(append_note || ''), ctx.agent);
+            else { const res = require('./intel').qaCheck(store, r, { outcome: String(append_note || '') }); const failed = res.checks.filter((c) => !c.ok); r = store.update(r.id, { qa: `${res.verdict}${failed.length ? ': ' + failed.map((c) => c.name).join(', ') : ''}`, qa_at: res.at, ...(failed.length ? { append: `**Cortex quality check: ${res.verdict.toUpperCase()}**\n${failed.map((c) => `- ${c.name}: ${c.detail}`).join('\n')}` } : {}) }); if (res.verdict !== 'pass') require('./notify').add(store.vault, { kind: 'qa', title: `Quality check ${res.verdict}: ${r.title}`, body: failed.map((c) => c.detail).join(' · ').slice(0, 280), ref: r.id, project: r.meta.project }); }
+          } catch { /* never block the update */ }
+        }
         const what = a.status ? `→ ${a.status}` : append_note ? 'added a note' : 'edited';
         log(ctx, 'task.update', `Task "${r.title}" ${what}`, r);
         return taskView(store, r);
@@ -542,6 +549,30 @@ function buildTools(store) {
         try { const fs = require('fs'); const d = path.join(store.vault, '.cortex', 'smartsave', 'triggers'); fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, `${Date.now()}-mcp.json`), JSON.stringify({ reason: 'upload', project: slug, urgent: false })); } catch { /* the timer uploads it anyway */ }
         return { saved: r.snapshot, files: r.files, changed: (r.changed || 0) + (r.added || 0), deleted: r.deleted || 0, note: 'Saved locally; Cortex uploads it to the backup targets in the background.' };
       },
+    },
+    {
+      name: 'failure_report',
+      description: 'Record a mistake you hit and how it was solved, so Cortex can warn the next agent doing similar work (shown in their brief as a known pitfall). Keep it short and factual. Never include secrets, keys or private conversation text.',
+      inputSchema: { type: 'object', required: ['task', 'cause'], properties: { task: str('What you were doing'), cause: str('What went wrong / the error'), fix: str('What fixed it (if solved)'), prevention: str('How to avoid it next time'), type: str('Optional type, e.g. test-failure, dependency, auth, rate-limit'), project: str('Project slug'), tools: { type: 'array', items: { type: 'string' } }, evidence: str('How you know (e.g. the test that now passes)') } },
+      run: (a, ctx) => { const I = require('./intel'); const r = I.failures.record(store.vault, { ...a, project: a.project ? store.resolveProject(a.project) : null, model: ctx.model || ctx.agent, source: ctx.agent || 'agent' }); return { id: r.id, type: r.type, count: r.count, merged: !!r.merged }; },
+    },
+    {
+      name: 'failures_lookup',
+      description: 'Known pitfalls for a task: earlier agents\' mistakes on similar work, with the fix that worked and how to prevent it. Free. Check before starting tricky work.',
+      inputSchema: { type: 'object', required: ['task'], properties: { task: str('What you are about to do'), project: str('Project slug') } },
+      run: (a) => require('./intel').failures.lookup(store.vault, a.task, { project: a.project ? store.resolveProject(a.project) : undefined, max: 5 }),
+    },
+    {
+      name: 'route_task',
+      description: 'Which Claude model (or Codex) Cortex recommends for a task and why: task complexity, how each model did on this user\'s past work, verified usage limits and the user\'s preferences. Free. Cheaper models are chosen when they are enough.',
+      inputSchema: { type: 'object', properties: { prompt: str('The task'), project: str('Project slug'), task: str('Task id') } },
+      run: (a) => require('./intel').router.route(store, { prompt: a.prompt, project: a.project ? store.resolveProject(a.project) : undefined, task: a.task }),
+    },
+    {
+      name: 'quality_check',
+      description: 'Check your work before marking a task done: unchecked acceptance items, failures in your summary, missing test evidence, unmentioned deliverables. Cortex also runs this automatically when a task is marked done.',
+      inputSchema: { type: 'object', required: ['task'], properties: { task: str('Task id or title'), summary: str('Your outcome summary (what you did, tests run and their results)') } },
+      run: (a) => require('./intel').qaCheck(store, store.must(a.task), { outcome: a.summary || '' }),
     },
     {
       name: 'experience_digest',

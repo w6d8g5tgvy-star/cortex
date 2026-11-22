@@ -47,6 +47,10 @@ function buildBrief(store, { project, task, assignment, runId }) {
     lines.push(`## Your task: ${t.title} (${t.id})`, '', `Status: ${t.meta.status} · priority ${t.meta.priority || 'medium'}${t.meta.due ? ` · due ${t.meta.due}` : ''}`, '');
     if (t.body && t.body.trim()) lines.push(clip(t.body, 4000), '');
     try { lines.push('### Fetcher (research help) for this task', '', ...require('./task-fetcher').briefLines(store, t), ''); } catch { /* optional */ }
+    try {
+      const pit = require('./intel').failures.briefLines(store.vault, `${t.title}\n${t.body || ''}\n${assignment || ''}`, { project: slug });
+      if (pit.length) lines.push('### Known pitfalls for this kind of task (from Cortex\'s failure database)', '', ...pit, '', 'If you hit a new problem and solve it, record it with `failure_report` so the next agent avoids it.', '');
+    } catch { /* optional */ }
   }
   try {
     const want = [t && t.title, t && t.body, assignment].filter(Boolean).join('\n');

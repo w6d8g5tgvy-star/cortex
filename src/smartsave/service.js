@@ -46,7 +46,7 @@ function startService({ vault, store, conf, log = () => {}, onChange = () => {} 
   }
   function saveAll(reason) { return Object.fromEntries(ss.enabledProjects().map((s) => [s, save(s, reason)])); }
   let uploading = null;
-  function kickUpload() { if (uploading || !ss.state().queue.length) return uploading; uploading = ss.uploadPending({ maxMs: 45000 }).then((r) => { metrics.uploads += r.uploaded || 0; if (r.uploaded || r.failed) onChange(); return r; }).catch((e) => { metrics.lastError = e.message; }).finally(() => { uploading = null; }); return uploading; }
+  function kickUpload() { if (uploading || !ss.state().queue.length) return uploading; uploading = ss.uploadPending({ maxMs: 45000 }).then((r) => { metrics.uploads += r.uploaded || 0; if (r.uploaded || r.failed) onChange(); if (r.failed) { const t = Object.entries(ss.state().targets).find(([, x]) => x.lastError && (x.failures || 0) >= 3); if (t) { try { require('../notify').add(vault, { kind: 'backup', title: `SmartSave can't upload to ${(conf().smartsave.targets.find((y) => y.id === t[0]) || {}).name || 'a backup destination'}`, body: t[1].lastError, key: 'backup|' + t[0] }); } catch { /* optional */ } } } return r; }).catch((e) => { metrics.lastError = e.message; }).finally(() => { uploading = null; }); return uploading; }
 
   /** Triggers from agent hooks (written as small files by the hook process: fast, no server round trip). */
   function readTriggers() {
@@ -69,7 +69,7 @@ function startService({ vault, store, conf, log = () => {}, onChange = () => {} 
     usageCheck = now;
     let u; try { u = require('../usage').scan({ now }); } catch { return; }
     const r = usageCrossing(usageBand.codex || 0, u.codex && u.codex.limits, now);
-    if (r.save) { saveAll(`usage ${r.band}%`); kickUpload(); }
+    if (r.save) { saveAll(`usage ${r.band}%`); kickUpload(); try { require('../notify').add(vault, { kind: 'usage', title: `Codex usage passed ${r.band}%`, body: 'SmartSave saved your projects. Consider switching models or waiting for the limit to reset.', key: 'usage|codex|' + r.band }); } catch { /* optional */ } }
     if (r.band !== null) usageBand.codex = r.band;
   }
 

@@ -102,6 +102,7 @@ function startServer({ store, port, host, token: cliToken }) {
   const doBackup = () => {
     if (conf().backups.daily) { try { backup.daily(vault); } catch { /* disk full etc. */ } }
     try { require('./experience').refreshAll(store); } catch { /* digests are best effort */ }
+    try { const I = require('./intel'); I.failures.mine(store); I.engine.proposeFromFailures(store); I.engine.evaluate(store); } catch { /* best effort */ }
   };
   setTimeout(doBackup, 15000).unref();
   setInterval(doBackup, 3600e3).unref();
@@ -341,6 +342,26 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
       return jobsMod.patch(vault, j.id, { status: 'running', runId: r.id, step: 'Running on this computer', startedAt: new Date().toISOString() });
     } catch (e) { return jobsMod.patch(vault, j.id, { status: 'error', step: e.message }); }
   }
+  function notifyJob(j) {
+    try { const ok = j.status === 'done'; require('./notify').add(vault, { kind: ok ? 'done' : 'failed', title: `${ok ? 'Finished' : j.status === 'stopped' ? 'Stopped' : 'Failed'} on ${j.deviceName}: ${String(j.prompt || j.task || '').slice(0, 80)}`, body: String(j.result || j.step || '').slice(0, 240), ref: j.id, project: j.project }); broadcast({ type: 'notify' }); } catch { /* optional */ }
+  }
+  /** Quality check when work is marked done (claims are not proof). Optionally keeps the task open if it fails. */
+  function runQa(task, outcome, who) {
+    try {
+      const I = require('./intel');
+      const res = I.qaCheck(store, task, { outcome: outcome || String(task.body || '').split('\n').slice(-6).join('\n') });
+      const failed = res.checks.filter((c) => !c.ok);
+      const block = conf().qa.block && res.verdict === 'fail';
+      const patch = { qa: `${res.verdict}${failed.length ? ': ' + failed.map((c) => c.name).join(', ') : ''}`, qa_at: res.at };
+      if (failed.length) patch.append = `**${res.at.slice(0, 16).replace('T', ' ')} · Cortex quality check: ${res.verdict.toUpperCase()}**${block ? ' (kept open)' : ''}\n${failed.map((c) => `- ${c.name}: ${c.detail}`).join('\n')}`;
+      if (block) patch.status = 'doing';
+      const r = store.update(task.id, patch);
+      if (res.verdict !== 'pass') require('./notify').add(vault, { kind: 'qa', title: `Quality check ${res.verdict === 'fail' ? 'failed' : 'warning'}: ${task.title}`, body: failed.map((c) => c.detail).join(' · ').slice(0, 280), ref: task.id, project: task.meta.project });
+      broadcast({ type: 'notify' });
+      return r;
+    } catch { return task; }
+  }
+  global.__cortexRunQa = runQa; // the MCP task_update in this process uses it too
   function tickJobs() {
     for (const j of jobsMod.list(vault, { limit: 100 })) {
       try {
@@ -348,7 +369,7 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
         else if (j.device === 'local' && j.status === 'running' && j.runId) {
           if (j.stopRequested && runner.running().includes(j.runId)) runner.stop(j.runId);
           const sx = sessions.get(vault, j.runId);
-          if (sx && sx.status !== 'working') jobsMod.patch(vault, j.id, { status: j.stopRequested ? 'stopped' : sx.status === 'error' ? 'error' : 'done', step: sx.step, result: sx.result, cost_usd: sx.cost_usd, finishedAt: new Date().toISOString() });
+          if (sx && sx.status !== 'working') { const fin = jobsMod.patch(vault, j.id, { status: j.stopRequested ? 'stopped' : sx.status === 'error' ? 'error' : 'done', step: sx.step, result: sx.result, cost_usd: sx.cost_usd, finishedAt: new Date().toISOString() }); notifyJob(fin); }
         } else if (j.device !== 'local' && j.status === 'running' && Date.now() - Date.parse(j.updated || j.startedAt) > 15 * 60000) {
           jobsMod.patch(vault, j.id, { status: 'error', step: `Lost contact with ${j.deviceName} (no update for 15 minutes)` });
         }
@@ -400,6 +421,7 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
       const done = ['done', 'error', 'stopped'].includes(j.status);
       sessions.upsert(vault, j.id, { status: done ? (j.status === 'error' ? 'error' : 'done') : 'working', step: j.step, ...(j.result ? { result: j.result } : {}), ...(j.cost_usd ? { cost_usd: j.cost_usd } : {}) }, done ? { kind: 'status', text: `${j.status === 'done' ? '✓ Finished' : j.status === 'stopped' ? '■ Stopped' : '✗ ' + j.step} on ${dev.name}` } : undefined);
       if (done && !j.recorded) {
+        notifyJob(j);
         try { brief.recordOutcome(store, { project: j.project, task: j.task, agent: j.tool === 'codex' ? 'codex' : 'claude-code', prompt: j.prompt, status: j.status === 'done' ? 'done' : j.status, result: j.result || j.step, runId: j.id }); } catch { /* best effort */ }
         jobsMod.patch(vault, j.id, { recorded: true });
       }
@@ -446,7 +468,8 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
     if (p === '/api/items' && m === 'PATCH') {
       const { id, quiet, ...patch } = await json();
       const prevStatus = store.must(id).meta.status;
-      const r = store.update(id, patch);
+      let r = store.update(id, patch);
+      if (r.kind === 'task' && patch.status === 'done' && prevStatus !== 'done') r = runQa(r, String(patch.append || ''), agent);
       if (!quiet) {
         const summary = patch.status && patch.status !== prevStatus ? `Moved "${r.title}" → ${patch.status}` : `Edited ${r.kind} "${r.title}"`;
         store.log({ agent, action: `${r.kind}.update`, summary, ref: r.id, project: r.kind === 'project' ? r.slug : r.meta.project });
@@ -786,6 +809,101 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
       } else store.update(r.id, { fetcher_quarantine: JSON.stringify(q) });
       store.log({ agent, action: b.action === 'approve' ? 'lesson.approved' : 'lesson.discarded', summary: `${b.action === 'approve' ? 'Approved' : 'Discarded'} quarantined technique "${t.name}" in ${r.title}`, ref: r.id });
       return send(res, 200, { ok: true, left: q.length });
+    }
+
+    // ---- Intelligence (2.2): profiles, failures, improvements, routing ----
+    if (p === '/api/intel' && m === 'GET') {
+      const I = require('./intel');
+      return send(res, 200, { profiles: I.profiles(store), failures: I.failures.all(vault).slice(-60).reverse(), failureStats: I.failures.stats(vault), improvements: I.engine.all(vault).slice(-40).reverse(), routing: { settings: conf().routing, recent: I.router.recent(vault, 15) } });
+    }
+    if (p === '/api/intel/route' && m === 'POST') { const b = await json(); return send(res, 200, require('./intel').router.route(store, { prompt: b.prompt, project: b.project ? store.resolveProject(b.project) : undefined, task: b.task, tool: b.tool })); }
+    if (p === '/api/intel/improvements' && m === 'POST') {
+      const b = await json(); const I = require('./intel');
+      try {
+        if (b.action === 'scan') { const mined = I.failures.mine(store); const props = I.engine.proposeFromFailures(store); return send(res, 200, { mined, proposed: props.length }); }
+        if (b.action === 'apply') { if (!localOnly()) return; return send(res, 200, I.engine.apply(store, b.id, { by: agent, force: !!b.force })); }
+        if (b.action === 'rollback') return send(res, 200, I.engine.rollback(store, b.id, { by: agent, reason: b.reason }));
+        if (b.action === 'reject') return send(res, 200, I.engine.reject(vault, b.id, agent));
+        if (b.action === 'test') return send(res, 200, I.engine.test(vault, b.id, b));
+        return send(res, 400, { error: 'unknown action' });
+      } catch (e) { return send(res, 400, { error: e.message }); }
+    }
+    if (p === '/api/intel/routing' && m === 'POST') {
+      if (!localOnly()) return;
+      const b = await json();
+      if (b.mode && !['suggest', 'auto', 'manual'].includes(b.mode)) return send(res, 400, { error: 'mode must be suggest, auto or manual' });
+      const r = { ...conf().routing, ...(b.mode ? { mode: b.mode } : {}), ...(b.model !== undefined ? { model: agents.cleanModel(b.model) || '' } : {}), ...(Array.isArray(b.never) ? { never: b.never.filter((x) => ['opus', 'sonnet', 'haiku'].includes(x)) } : {}) };
+      settingsMod.save(vault, { ...conf(), routing: r });
+      return send(res, 200, r);
+    }
+    // ---- notifications ----
+    if (p === '/api/notifications' && m === 'GET') { const n = require('./notify'); const all = n.list(vault, { limit: 60 }); return send(res, 200, { unread: all.filter((x) => !x.read).length, items: all, kinds: n.KINDS, off: conf().notifications.off }); }
+    if (p === '/api/notifications/read' && m === 'POST') { const b = await json(); return send(res, 200, require('./notify').markRead(vault, b.ids || 'all')); }
+    if (p === '/api/notifications/settings' && m === 'POST') { if (!localOnly()) return; const b = await json(); settingsMod.save(vault, { ...conf(), notifications: { ...conf().notifications, off: (b.off || []).filter((k) => require('./notify').KINDS[k]) } }); return send(res, 200, { ok: true }); }
+    // ---- emergency stop (any paired device: it only ever stops things) ----
+    if (p === '/api/emergency-stop' && m === 'POST') {
+      const stopped = { runs: 0, jobs: 0, research: 0 };
+      for (const id of runner.running()) { if (runner.stop(id)) stopped.runs++; }
+      for (const j of jobsMod.list(vault, { limit: 200 })) if (['needs-approval', 'queued', 'running'].includes(j.status)) { jobsMod.requestStop(vault, j.id); stopped.jobs++; }
+      try { for (const j of fetcher.list()) if (['queued', 'running', 'needs-approval'].includes(j.status)) { (fetcher.stop || fetcher.reject).call(fetcher, j.id); stopped.research++; } } catch { /* optional */ }
+      store.log({ agent, action: 'emergency.stop', summary: `Emergency stop: ${stopped.runs} agent runs, ${stopped.jobs} jobs and ${stopped.research} research runs stopped` });
+      broadcast({ type: 'live' });
+      return send(res, 200, stopped);
+    }
+    // ---- command center: plain English → action (sensitive ones need confirm: true) ----
+    if (p === '/api/command' && m === 'POST') {
+      const b = await json();
+      const plan = require('./nlcmd').parse(b.text, { projects: store.list('project').map((x) => ({ title: x.title, slug: x.slug })) });
+      if (plan.intent === 'unknown') return send(res, 200, plan);
+      if (plan.confirm && !b.confirm) return send(res, 200, { ...plan, needsConfirm: true });
+      const pr = plan.params;
+      try {
+        if (plan.intent === 'create-project') { const r = store.create('project', { title: pr.title }); return send(res, 200, { ...plan, done: true, go: '#/projects/' + r.slug }); }
+        if (plan.intent === 'search') return send(res, 200, { ...plan, done: true, results: store.search(pr.q, { limit: 8 }).map((h) => ({ id: h.rec.id, title: h.rec.title, kind: h.rec.kind, snippet: h.snippet })) });
+        if (plan.intent === 'connect-device') return send(res, 200, { ...plan, done: true, go: '#/settings', note: `Open Settings → Devices → Add a ${pr.kind}` });
+        if (plan.intent === 'troubleshoot') return send(res, 200, { ...plan, done: true, health: insights.health(store), go: '#/settings' });
+        if (plan.intent === 'improve') { const I = require('./intel'); const mined = I.failures.mine(store); const props = I.engine.proposeFromFailures(store); return send(res, 200, { ...plan, done: true, mined: mined.added, proposed: props.length, go: '#/agents' }); }
+        if (plan.intent === 'organize') return send(res, 200, { ...plan, done: true, go: '#/memory', health: insights.health(store) });
+        if (plan.intent === 'ui-mode') { settingsMod.save(vault, { ...conf(), ui: { ...conf().ui, mode: pr.mode } }); return send(res, 200, { ...plan, done: true, reload: true }); }
+        if (plan.intent === 'save') { const r = pr.project ? { [pr.project]: smart.save(pr.project, 'saved by you') } : smart.saveAll('saved by you'); smart.kickUpload(); return send(res, 200, { ...plan, done: true, result: r }); }
+        if (plan.intent === 'emergency-stop') { const r = await (await fetch(`http://127.0.0.1:${port}/api/emergency-stop`, { method: 'POST' })).json(); return send(res, 200, { ...plan, done: true, result: r }); }
+        if (plan.intent === 'research') { const j = fetcher.create({ topic: pr.topic, project: pr.project || undefined, from: agent }); return send(res, 200, { ...plan, done: true, go: '#/fetcher', id: j.id }); }
+        if (plan.intent === 'launch') {
+          const devs = require('./devices').list(vault).filter((d) => d.kind === 'computer');
+          const dev = pr.computer ? devs.find((d) => d.name.toLowerCase().includes(pr.computer.toLowerCase())) : null;
+          if (pr.computer && !dev) return send(res, 400, { error: `No paired computer called "${pr.computer}"` });
+          const route = require('./intel').router.route(store, { prompt: pr.prompt, project: pr.project, tool: pr.tool });
+          const j = jobsMod.create(vault, { device: dev ? dev.id : 'local', deviceName: dev ? dev.name : 'This computer', tool: route.tool, model: conf().routing.mode === 'auto' ? route.model : undefined, prompt: pr.prompt, project: pr.project || undefined, from: agent });
+          if (j.device === 'local') startLocalJob(j);
+          return send(res, 200, { ...plan, done: true, job: j.id, route, go: '#/agents' });
+        }
+        if (plan.intent === 'continue') {
+          const st = smart.ss.status().projects; const slug = pr.project || Object.keys(st).sort((a, c) => ((st[a].lastLocal || {}).time < (st[c].lastLocal || {}).time ? 1 : -1))[0];
+          if (!slug) return send(res, 400, { error: 'Nothing saved to continue yet (turn on SmartSave for a project first)' });
+          const latest = smart.ss.snapshots(slug, { limit: 1 })[0];
+          const ctx = latest ? smart.ss.repo.getSnapshot(slug, latest.id).context : {};
+          const prompt = `Continue the unfinished work on this project.${ctx && ctx.asked ? ` It was: ${ctx.asked}.` : ''}${ctx && ctx.step ? ` Last step: ${ctx.step}.` : ''}${ctx && ctx.task ? ` Task: ${ctx.task.title} (${ctx.task.id}).` : ''} Check the current state first, then carry on.`;
+          const j = jobsMod.create(vault, { device: 'local', deviceName: 'This computer', tool: 'claude', prompt, project: slug, task: ctx && ctx.task ? ctx.task.id : undefined, from: agent });
+          startLocalJob(j);
+          return send(res, 200, { ...plan, done: true, job: j.id, project: slug, go: '#/live' });
+        }
+        if (plan.intent === 'setting') {
+          if (!local) return send(res, 403, { error: 'Change settings on the computer running Cortex' });
+          if (pr.smartsave) {
+            const cur = conf().smartsave; const next = { ...cur, projects: { ...cur.projects } };
+            if (pr.smartsave.intervalSec) next.intervalSec = Math.max(30, Math.min(3600, pr.smartsave.intervalSec));
+            if (pr.smartsave.enabled !== undefined) { if (pr.smartsave.project) { next.projects[pr.smartsave.project] = { ...(next.projects[pr.smartsave.project] || {}), enabled: pr.smartsave.enabled }; if (pr.smartsave.enabled) next.enabled = true; } else next.enabled = pr.smartsave.enabled; }
+            settingsMod.save(vault, { ...conf(), smartsave: next });
+          } else {
+            const c = conf(); const merged = { ...c };
+            for (const [k, v] of Object.entries(pr)) if (['remote', 'updates', 'screen', 'agents'].includes(k)) merged[k] = { ...c[k], ...v };
+            settingsMod.save(vault, merged);
+          }
+          store.log({ agent, action: 'settings.nl', summary: `Changed a setting by command: ${plan.summary}` });
+          return send(res, 200, { ...plan, done: true });
+        }
+      } catch (e) { return send(res, 400, { error: e.message }); }
+      return send(res, 400, { error: 'Not supported yet' });
     }
 
     // ---- SmartSave: autosave + recovery ----
