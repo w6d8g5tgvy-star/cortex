@@ -811,6 +811,9 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
       return send(res, 200, { ok: true, left: q.length });
     }
 
+    // ---- automatic troubleshooting ----
+    if (p === '/api/doctor' && m === 'GET') return send(res, 200, await require('./doctor').diagnose({ vault, store, conf, runner, tunnel, smart, claudeHooks, updater }));
+    if (p === '/api/doctor/fix' && m === 'POST') { if (!localOnly()) return; const b = await json(); try { const r = await require('./doctor').fix(b.action, { vault, runner, tunnel, smart, claudeHooks, checkUpdates }); store.log({ agent, action: 'doctor.fix', summary: `Troubleshooting: ran "${b.action}"` }); return send(res, 200, r); } catch (e) { return send(res, 400, { error: e.message }); } }
     // ---- interface mode (Simple / Advanced) and hidden panels: any paired device may change its look ----
     if (p === '/api/ui' && m === 'POST') {
       const b = await json(); const cur = conf().ui || {};
@@ -875,7 +878,7 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
         if (plan.intent === 'create-project') { const r = store.create('project', { title: pr.title }); return send(res, 200, { ...plan, done: true, go: '#/projects/' + r.slug }); }
         if (plan.intent === 'search') return send(res, 200, { ...plan, done: true, results: store.search(pr.q, { limit: 8 }).map((h) => ({ id: h.rec.id, title: h.rec.title, kind: h.rec.kind, snippet: h.snippet })) });
         if (plan.intent === 'connect-device') return send(res, 200, { ...plan, done: true, go: '#/settings', note: `Open Settings → Devices → Add a ${pr.kind}` });
-        if (plan.intent === 'troubleshoot') return send(res, 200, { ...plan, done: true, health: insights.health(store), go: '#/settings' });
+        if (plan.intent === 'troubleshoot') { const d = await require('./doctor').diagnose({ vault, store, conf, runner, tunnel, smart, claudeHooks, updater }); return send(res, 200, { ...plan, done: true, doctor: d, note: d.ok ? 'Everything looks fine.' : `${d.checks.filter((x) => !x.ok).length} problem(s) found: see Settings → Health check`, go: '#/settings' }); }
         if (plan.intent === 'improve') { const I = require('./intel'); const mined = I.failures.mine(store); const props = I.engine.proposeFromFailures(store); return send(res, 200, { ...plan, done: true, mined: mined.added, proposed: props.length, go: '#/agents' }); }
         if (plan.intent === 'organize') return send(res, 200, { ...plan, done: true, go: '#/memory', health: insights.health(store) });
         if (plan.intent === 'ui-mode') { settingsMod.save(vault, { ...conf(), ui: { ...conf().ui, mode: pr.mode } }); return send(res, 200, { ...plan, done: true, reload: true }); }

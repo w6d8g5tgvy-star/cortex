@@ -153,9 +153,25 @@
     p.querySelectorAll('[data-ui-panel]').forEach((c) => (c.onchange = async () => { const hide = [...p.querySelectorAll('[data-ui-panel]')].filter((x) => !x.checked).map((x) => x.dataset.uiPanel); UI = await api('/api/ui', { method: 'POST', body: { hidePanels: hide } }); applyUi(); }));
   }
 
+  // ---------------- Settings → Health check (troubleshooting with one-click fixes) ----------------
+  async function doctorPanel() {
+    const grid = document.querySelector('.settings-grid'); if (!grid || grid.querySelector('#dr-set')) return;
+    const p = document.createElement('div'); p.className = 'panel'; p.id = 'dr-set'; grid.prepend(p);
+    const draw = async () => {
+      p.innerHTML = '<h3>Health check</h3><div class="small muted">Checking…</div>';
+      let d; try { d = await api('/api/doctor'); } catch (e) { p.innerHTML = `<h3>Health check</h3><div class="small">${esc(e.message)}</div>`; return; }
+      const bad = d.checks.filter((c) => !c.ok);
+      p.innerHTML = `<div class="in-row"><h3 style="margin:0;flex:1">Health check</h3><button class="btn sm ghost" id="dr-again">Check again</button></div>
+        ${bad.length ? bad.map((c) => `<div class="in-imp"><b style="font-size:13px">${esc(c.area)}: ${esc(c.problem)}</b><div class="small muted">${esc(c.explain || '')}</div>${c.fix ? `<button class="btn sm primary" style="margin-top:6px" data-dr="${esc(c.fix.action)}">${esc(c.fix.label)}</button>` : ''}</div>`).join('') : `<div class="small">✓ All ${d.checks.length} checks passed: agents, integrations, connection, storage, backups, devices, updates.</div>`}`;
+      p.querySelector('#dr-again').onclick = draw;
+      p.querySelectorAll('[data-dr]').forEach((b) => (b.onclick = async () => { b.disabled = true; b.textContent = 'Fixing…'; try { await api('/api/doctor/fix', { method: 'POST', body: { action: b.dataset.dr } }); toast('Done'); } catch (e) { fail(e); } draw(); }));
+    };
+    draw();
+  }
+
   const wrap = (name, after) => { const orig = window[name]; if (typeof orig !== 'function') return; window[name] = function (...a) { const r = orig.apply(this, a); Promise.resolve(r).then(() => after()).catch((e) => console.warn(name, e)); return r; }; };
   wrap('renderHome', () => { if (S.route[0] === 'home') commandPanel(); });
   wrap('renderAgents', () => { if (S.route[0] === 'agents') return intelPanel(); });
   wrap('renderSkills', () => { if (S.route[0] === 'skills') return skillVersions(); });
-  wrap('renderSettings', () => { if (S.route[0] === 'settings') return uiPanel(); });
+  wrap('renderSettings', () => { if (S.route[0] === 'settings') { uiPanel(); return doctorPanel(); } });
 })();
