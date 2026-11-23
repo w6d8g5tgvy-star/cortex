@@ -314,6 +314,15 @@
     draw();
   }
 
+  // ---------------- standby copy banner ----------------
+  api('/api/standby').then((d) => {
+    if (!d.standby || !d.standby.active) return;
+    const bar = document.createElement('div');
+    bar.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:70;padding:6px 14px;font:600 13px system-ui;color:#1b1300;background:linear-gradient(90deg,#ffc35c,#ff9f5c);text-align:center';
+    bar.textContent = `Standby copy on ${d.standby.device}: your main computer is off (since ${new Date(d.standby.since).toLocaleString()}). Changes made here go back to it automatically when it returns.`;
+    document.body.appendChild(bar);
+  }).catch(() => {});
+
   const wrap = (name, after) => { const orig = window[name]; if (typeof orig !== 'function') return; window[name] = function (...a) { const r = orig.apply(this, a); Promise.resolve(r).then(() => after()).catch((e) => console.warn(name, e)); return r; }; };
   wrap('renderHome', () => { if (S.route[0] === 'home') { commandPanel(); shortcutsInto(document.querySelector('#cc-panel')); resumeBanner(); } });
   wrap('renderLive', () => { if (S.route[0] === 'live') return timelinePanel(); });

@@ -388,6 +388,17 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
       broadcast({ type: 'live' });
       return send(res, 200, { job: { id: j.id, tool: j.tool, model: j.model, prompt: j.prompt, project: j.project, task: j.task, brief: jobBrief(j), ...(j.restore ? { restore: j.restore } : {}) } });
     }
+    // ---- standby host: a paired computer keeps a copy of this vault and hands changes back ----
+    if (u.pathname === '/api/runner/ping' && req.method === 'POST') return send(res, 200, { ok: true, version: require('../package.json').version });
+    if (u.pathname === '/api/runner/vault-changes' && req.method === 'POST') return send(res, 200, require('./standby').changes(vault, b.known || {}));
+    if (u.pathname === '/api/runner/vault-import' && req.method === 'POST') {
+      const r = require('./standby').importChanges(vault, b.files || [], { baseline: b.baseline || {}, device: dev.name });
+      store.scan(false);
+      store.log({ agent: 'cortex', action: 'standby.handback', summary: `${dev.name} handed back ${r.written.length} changed file(s) made while this computer was off${r.conflicts.length ? `; ${r.conflicts.length} conflict(s) kept side by side` : ''}`, device: dev.name });
+      if (r.written.length || r.conflicts.length) { try { require('./notify').add(vault, { kind: 'done', title: `${dev.name} handed back the work done while this computer was off`, body: `${r.written.length} files updated${r.conflicts.length ? `, ${r.conflicts.length} edited in both places (both versions kept: ${r.conflicts.map((c) => c.savedAs).slice(0, 3).join(', ')})` : ''}`, key: 'standby|' + dev.id }); } catch { /* optional */ } }
+      broadcast({ type: 'change' });
+      return send(res, 200, r);
+    }
     if (u.pathname === '/api/runner/smartsave-key' && req.method === 'POST') return send(res, 200, { key: smart.ss.recoveryKey() });
     if (u.pathname.startsWith('/api/runner/smartsave/')) {
       const key = u.pathname.slice('/api/runner/smartsave/'.length);
@@ -441,6 +452,7 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
     const agent = local ? 'you' : 'you (phone)';
     const localOnly = () => { if (!local) { send(res, 403, { error: 'This setting can only be changed on the computer running Cortex.' }); return false; } return true; };
 
+    if (p === '/api/standby' && m === 'GET') { let sb = null; try { sb = JSON.parse(fs.readFileSync(path.join(vault, '.cortex', 'standby.json'), 'utf8')); } catch { /* not a standby copy */ } return send(res, 200, { standby: sb, standbyComputers: require('./devices').list(vault).filter((d) => d.kind === 'computer').map((d) => ({ name: d.name, online: d.online, lastSeen: d.lastSeen })) }); }
     if (p === '/api/state' && m === 'GET') {
       return send(res, 200, {
         version: VERSION,

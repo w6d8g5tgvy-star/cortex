@@ -44,6 +44,7 @@ Usage:
   cortex update           Check for an update and install it
   cortex runner           Let this computer run agent jobs for your main Cortex
                           (first time: --hub <main Cortex address> --code <code> --folder <dir>)
+                          --standby: also keep a copy of the main Cortex and serve it while the main computer is off
   cortex help             Show this help
 
 Options:
@@ -117,7 +118,7 @@ async function main() {
 
   if (cmd === 'runner') {
     const folders = args.map((x, i) => (x === '--folder' ? args[i + 1] : null)).filter(Boolean);
-    try { await require('../src/runner-client').start({ hub: flag('hub'), code: flag('code'), name: flag('name'), folders, once: has('once') }); }
+    try { await require('../src/runner-client').start({ hub: flag('hub'), code: flag('code'), name: flag('name'), folders, once: has('once'), standby: has('standby'), port: Number(flag('port')) || 7777, takeoverMinutes: flag('takeover-minutes') !== undefined ? Number(flag('takeover-minutes')) : 5 }); }
     catch (e) { console.error('✗ ' + e.message); process.exit(1); }
     return;
   }

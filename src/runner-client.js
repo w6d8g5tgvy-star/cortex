@@ -83,6 +83,49 @@ async function replicate(conf, log) {
   return done.length;
 }
 
+// ---------- standby host: keep a copy of the main vault; serve it while the main computer is off ----------
+const SB = { vault: path.join(HOME, 'standby-vault'), child: null, takeoverAt: 0, baseline: null, firstFail: 0, lastSync: 0, synced: false };
+const SBFILE = path.join(HOME, 'standby.json');
+function sbState() { try { return JSON.parse(fs.readFileSync(SBFILE, 'utf8')); } catch { return {}; } }
+function sbSave(x) { fs.mkdirSync(HOME, { recursive: true }); fs.writeFileSync(SBFILE, JSON.stringify(x)); }
+async function standbySync(conf, log) {
+  const sb = require('./standby');
+  fs.mkdirSync(SB.vault, { recursive: true });
+  let n = 0;
+  for (let i = 0; i < 50; i++) { // chunked
+    const resp = await call(conf, '/api/runner/vault-changes', { known: sb.index(SB.vault) });
+    n += sb.applyChanges(SB.vault, resp).wrote;
+    if (!resp.more) break;
+  }
+  SB.lastSync = Date.now(); SB.synced = true; sbSave({ ...sbState(), lastSync: SB.lastSync, synced: true });
+  if (n) log(`Standby copy updated (${n} file${n === 1 ? '' : 's'}).`);
+  return n;
+}
+function standbyTakeover(conf, opts, log) {
+  if (SB.child) return;
+  const sb = require('./standby');
+  SB.baseline = sb.index(SB.vault); SB.takeoverAt = Date.now();
+  fs.mkdirSync(path.join(SB.vault, '.cortex'), { recursive: true });
+  fs.writeFileSync(path.join(SB.vault, '.cortex', 'standby.json'), JSON.stringify({ active: true, since: new Date(SB.takeoverAt).toISOString(), main: conf.hub, device: (conf.device && conf.device.name) || os.hostname(), lastSync: new Date(SB.lastSync).toISOString() }));
+  sbSave({ ...sbState(), active: true, takeoverAt: SB.takeoverAt, baseline: SB.baseline });
+  const { spawn } = require('child_process');
+  SB.child = spawn(process.execPath, [path.join(__dirname, '..', 'bin', 'cortex.js'), 'serve', '--vault', SB.vault, '--port', String(opts.port || 7777)], { stdio: 'ignore', env: { ...process.env, CORTEX_STANDBY: '1' } });
+  log(`Main Cortex has been unreachable for ${opts.takeoverMinutes || 5} minutes: now serving the standby copy at http://localhost:${opts.port || 7777} (last copied ${new Date(SB.lastSync).toLocaleString()}).`);
+}
+async function standbyHandback(conf, log) {
+  const sb = require('./standby');
+  const st = sbState();
+  const files = sb.changedSince(SB.vault, SB.takeoverAt || st.takeoverAt || 0).filter((f) => !f.path.startsWith('.cortex/'));
+  const r = await call(conf, '/api/runner/vault-import', { files, baseline: SB.baseline || st.baseline || {} });
+  if (SB.child) { try { SB.child.kill(); } catch { /* gone */ } SB.child = null; }
+  try { fs.rmSync(path.join(SB.vault, '.cortex', 'standby.json'), { force: true }); } catch { /* ok */ }
+  sbSave({ ...st, active: false, takeoverAt: 0, baseline: null, lastHandback: Date.now() });
+  SB.takeoverAt = 0; SB.baseline = null;
+  log(`Main Cortex is back: handed back ${r.written.length} changed file(s)${r.conflicts.length ? ` (${r.conflicts.length} edited in both places: both versions kept)` : ''}. Standby copy is passive again.`);
+  await standbySync(conf, log);
+  return r;
+}
+
 async function runOne(conf, job, runner, sessions, log) {
   let cwd = folderFor(conf, job);
   const ws = /^[\w-]{1,80}$/.test(job.project || '') ? job.project : 'unsorted';
@@ -133,7 +176,26 @@ async function start(opts, log = console.log) {
   const runner = new AgentRunner(store);
   log(`Cortex runner ${VERSION}: "${(conf.device && conf.device.name) || os.hostname()}" connected to ${conf.hub}. Allowed folders: ${(conf.folders || []).join(', ') || 'none'}. Waiting for jobs (Ctrl+C to stop).`);
   let backoff = 5000; let lastReplica = 0;
+  if (opts.standby) {
+    const st = sbState();
+    if (st.active && st.takeoverAt) { SB.takeoverAt = st.takeoverAt; SB.baseline = st.baseline; } // resumed after a restart while serving
+    log(`Standby mode on: keeping a copy of the main Cortex in ${SB.vault}; takes over after ${opts.takeoverMinutes || 5} minutes without the main computer.`);
+  }
   for (;;) {
+    if (opts.standby) {
+      try {
+        await call(conf, '/api/runner/ping');
+        SB.firstFail = 0;
+        if (SB.child || SB.takeoverAt) await standbyHandback(conf, log);
+        else if (Date.now() - SB.lastSync > (opts.once ? 0 : 2 * 60000)) await standbySync(conf, log);
+      } catch (e) {
+        if (e.status === 401) throw new Error('This computer was removed from Cortex. Pair it again with a new code.');
+        if (!SB.firstFail) SB.firstFail = Date.now();
+        const waited = (Date.now() - SB.firstFail) / 60000;
+        if (!SB.child && (SB.synced || sbState().synced) && waited >= (opts.takeoverMinutes ?? 5)) standbyTakeover(conf, opts, log);
+      }
+      if (SB.child) { if (opts.once) return; await new Promise((res) => setTimeout(res, 15000)); continue; } // serving: don't take jobs from the (absent) main
+    }
     if (Date.now() - lastReplica > (opts.once ? 0 : 5 * 60000)) { lastReplica = Date.now(); try { const n = await replicate(conf, log); if (n) log(`Kept a copy of ${n} checkpoint${n === 1 ? '' : 's'} from the main Cortex.`); } catch (e) { if (e.status === 401) throw new Error('This computer was removed from Cortex. Pair it again with a new code.'); } }
     try {
       const r = await call(conf, '/api/runner/next');
@@ -149,4 +211,4 @@ async function start(opts, log = console.log) {
   }
 }
 
-module.exports = { start, pair, folderFor, loadConf, replicate, HOME, _reset: () => { smart = null; } };
+module.exports = { start, pair, folderFor, loadConf, replicate, HOME, SB, _reset: () => { smart = null; }, _stopStandby: () => { if (SB.child) { try { SB.child.kill(); } catch { /* gone */ } SB.child = null; } } };
