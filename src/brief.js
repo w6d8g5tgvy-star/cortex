@@ -46,6 +46,8 @@ function buildBrief(store, { project, task, assignment, runId }) {
   if (t) {
     lines.push(`## Your task: ${t.title} (${t.id})`, '', `Status: ${t.meta.status} · priority ${t.meta.priority || 'medium'}${t.meta.due ? ` · due ${t.meta.due}` : ''}`, '');
     if (t.body && t.body.trim()) lines.push(clip(t.body, 4000), '');
+    try { const b = require('./orchestra').blockedBy(store, t); if (b.length) lines.push(`> Waiting on: ${b.map((x) => `${x.title || x.id} (${x.missing ? 'missing' : x.meta.status})`).join(', ')}. Finish or check those first.`, ''); } catch { /* optional */ }
+    if (t.meta.verified === 'pending') lines.push('> This task needs independent verification by a different agent when done.', '');
     try { const miss = require('./context').missingInfo(t); if (miss.length) lines.push(...miss.map((x) => `> ${x}`), ''); } catch { /* optional */ }
     try { lines.push('### Fetcher (research help) for this task', '', ...require('./task-fetcher').briefLines(store, t), ''); } catch { /* optional */ }
     try {

@@ -174,6 +174,7 @@ function buildTools(store) {
           title: str('Short task title'), project: str('Project slug or title'), description: str('Markdown details, acceptance criteria, links'),
           status: str('Status (default todo)', { enum: ENUMS.task.status }), priority: str('Priority (default medium)', { enum: ENUMS.task.priority }),
           assignee: str('Who owns it (a person or agent name)'), due: str('Due date YYYY-MM-DD'), tags: tagsProp,
+          depends_on: str('Task ids this one waits for (comma-separated)'), verify: { type: 'boolean', description: 'When done, a different agent must verify the work' },
         },
       },
       run: (a, ctx) => {
@@ -201,6 +202,7 @@ function buildTools(store) {
         if (append_note) patch.append = `**${new Date().toISOString().slice(0, 16).replace('T', ' ')} · ${ctx.agent}${ctx.model ? ` (${ctx.model})` : ''}:** ${append_note}`;
         const before = store.must(id).meta.status;
         let r = store.update(id, patch);
+        if (a.status === 'done' && before !== 'done' && r && r.kind === 'task') { try { require('./orchestra').requestVerification(store, r, ctx.agent); } catch { /* optional */ } }
         if (a.status === 'done' && before !== 'done' && r && r.kind === 'task') {
           try {
             if (global.__cortexRunQa) r = global.__cortexRunQa(r, String(append_note || ''), ctx.agent);
@@ -549,6 +551,24 @@ function buildTools(store) {
         try { const fs = require('fs'); const d = path.join(store.vault, '.cortex', 'smartsave', 'triggers'); fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, `${Date.now()}-mcp.json`), JSON.stringify({ reason: 'upload', project: slug, urgent: false })); } catch { /* the timer uploads it anyway */ }
         return { saved: r.snapshot, files: r.files, changed: (r.changed || 0) + (r.added || 0), deleted: r.deleted || 0, note: 'Saved locally; Cortex uploads it to the backup targets in the background.' };
       },
+    },
+    {
+      name: 'next_task',
+      description: 'Get (and claim) the most important open task you can work on: its dependencies are done and no other active agent owns it. Tasks whose agent has been silent for 2+ hours can be taken over. One task at a time.',
+      inputSchema: { type: 'object', properties: { project: str('Project slug (optional)'), peek: { type: 'boolean', description: 'Just look, do not claim' } } },
+      run: (a, ctx) => require('./orchestra').nextTask(store, { agent: ctx.agent, project: a.project ? store.resolveProject(a.project) : undefined, claim: !a.peek }),
+    },
+    {
+      name: 'task_claim',
+      description: 'Claim a specific task before working on it. Refused if another active agent owns it or it is waiting on other tasks (prevents two agents doing the same work).',
+      inputSchema: { type: 'object', required: ['id'], properties: { id: str('Task id or title') } },
+      run: (a, ctx) => require('./orchestra').claim(store, a.id, ctx.agent),
+    },
+    {
+      name: 'task_verify',
+      description: 'Record an independent verification of another agent\'s finished task (only a different kind of agent may verify). passed=false reopens the task with your notes.',
+      inputSchema: { type: 'object', required: ['id', 'passed'], properties: { id: str('The verification task id, or the task being verified'), passed: { type: 'boolean' }, notes: str('What you checked: tests run, acceptance items, problems found') } },
+      run: (a, ctx) => require('./orchestra').verify(store, a.id, ctx.agent, { passed: a.passed, notes: a.notes }),
     },
     {
       name: 'failure_report',

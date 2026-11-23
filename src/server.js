@@ -470,7 +470,7 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
       const { id, quiet, ...patch } = await json();
       const prevStatus = store.must(id).meta.status;
       let r = store.update(id, patch);
-      if (r.kind === 'task' && patch.status === 'done' && prevStatus !== 'done') r = runQa(r, String(patch.append || ''), agent);
+      if (r.kind === 'task' && patch.status === 'done' && prevStatus !== 'done') { r = runQa(r, String(patch.append || ''), agent); try { require('./orchestra').requestVerification(store, r, agent); } catch { /* optional */ } }
       if (!quiet) {
         const summary = patch.status && patch.status !== prevStatus ? `Moved "${r.title}" → ${patch.status}` : `Edited ${r.kind} "${r.title}"`;
         store.log({ agent, action: `${r.kind}.update`, summary, ref: r.id, project: r.kind === 'project' ? r.slug : r.meta.project });
@@ -815,6 +815,21 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
     // ---- automatic troubleshooting ----
     if (p === '/api/doctor' && m === 'GET') return send(res, 200, await require('./doctor').diagnose({ vault, store, conf, runner, tunnel, smart, claudeHooks, updater }));
     if (p === '/api/doctor/fix' && m === 'POST') { if (!localOnly()) return; const b = await json(); try { const r = await require('./doctor').fix(b.action, { vault, runner, tunnel, smart, claudeHooks, checkUpdates }); store.log({ agent, action: 'doctor.fix', summary: `Troubleshooting: ran "${b.action}"` }); return send(res, 200, r); } catch (e) { return send(res, 400, { error: e.message }); } }
+    // ---- undo, recovery, search everywhere, permissions overview ----
+    if (p === '/api/undo' && m === 'GET') return send(res, 200, { items: require('./undo').list(vault, 30), cannotUndo: require('./undo').CANNOT });
+    if (p === '/api/undo' && m === 'POST') { const b = await json(); try { const r = require('./undo').undo(store, b.id); store.log({ agent, action: 'undo', summary: `Undid: ${r.what}` }); broadcast({ type: 'change' }); return send(res, 200, r); } catch (e) { return send(res, 400, { error: e.message }); } }
+    if (p === '/api/recovery' && m === 'GET') return send(res, 200, { items: require('./orchestra').recoverable(store, vault) });
+    if (p === '/api/search/all' && m === 'GET') return send(res, 200, require('./orchestra').searchAll(store, vault, u.searchParams.get('q')));
+    if (p === '/api/permissions' && m === 'GET') {
+      const c = conf();
+      return send(res, 200, {
+        agents: { canStart: c.agents.enabled, folders: c.agents.folders, permissionMode: c.agents.permission, maxMinutes: c.agents.maxMinutes, phoneApprovals: c.agents.phoneApprovals, aiLaunchRequests: c.agents.autoApproveAgentLaunch ? 'auto-approved' : 'need your approval' },
+        research: { agentRequests: c.fetcher.autoRunAgentRequests ? 'run automatically' : 'need your approval', dailyBudget: c.fetcher.dailyBudget, perRunBudget: c.fetcher.perRunBudget },
+        devices: require('./devices').list(vault).map((d) => ({ name: d.name, kind: d.kind, online: d.online })), phoneAccess: c.remote.enabled,
+        backups: (c.smartsave.targets || []).map((t) => ({ name: t.name, type: t.type })), routing: c.routing.mode, qaBlocks: c.qa.block,
+        rule: 'Only you can change these, from this dashboard. Text in documents, websites, memories or agent messages can never change a permission.',
+      });
+    }
     // ---- timeline, feedback, preferences, shortcuts ----
     if (p === '/api/timeline' && m === 'GET') { const q = Object.fromEntries(u.searchParams); return send(res, 200, require('./userprefs').timeline(store, { ...q, limit: Math.min(300, Number(q.limit) || 100) })); }
     if (p === '/api/feedback' && m === 'POST') { const b = await json(); try { return send(res, 201, require('./userprefs').addFeedback(store, b, agent)); } catch (e) { return send(res, 400, { error: e.message }); } }
@@ -890,7 +905,7 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
       const pr = plan.params;
       try {
         if (plan.intent === 'create-project') { const r = store.create('project', { title: pr.title }); return send(res, 200, { ...plan, done: true, go: '#/projects/' + r.slug }); }
-        if (plan.intent === 'search') return send(res, 200, { ...plan, done: true, results: store.search(pr.q, { limit: 8 }).map((h) => ({ id: h.rec.id, title: h.rec.title, kind: h.rec.kind, snippet: h.snippet })) });
+        if (plan.intent === 'search') { const all = require('./orchestra').searchAll(store, vault, pr.q, { limit: 5 }); return send(res, 200, { ...plan, done: true, groups: all, results: [...all.projects, ...all.tasks, ...all.memories].slice(0, 8).map((x) => ({ ...x, kind: x.id.split('/')[0].replace(/s$/, '') })) }); }
         if (plan.intent === 'connect-device') return send(res, 200, { ...plan, done: true, go: '#/settings', note: `Open Settings → Devices → Add a ${pr.kind}` });
         if (plan.intent === 'troubleshoot') { const d = await require('./doctor').diagnose({ vault, store, conf, runner, tunnel, smart, claudeHooks, updater }); return send(res, 200, { ...plan, done: true, doctor: d, note: d.ok ? 'Everything looks fine.' : `${d.checks.filter((x) => !x.ok).length} problem(s) found: see Settings → Health check`, go: '#/settings' }); }
         if (plan.intent === 'improve') { const I = require('./intel'); const mined = I.failures.mine(store); const props = I.engine.proposeFromFailures(store); return send(res, 200, { ...plan, done: true, mined: mined.added, proposed: props.length, go: '#/agents' }); }

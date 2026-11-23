@@ -65,7 +65,7 @@
       let r; try { r = await api('/api/command', { method: 'POST', body: { text, confirm } }); } catch (e) { out.innerHTML = `<div class="small" style="color:var(--bad)">${esc(e.message)}</div>`; return; }
       if (r.intent === 'unknown') { out.innerHTML = `<div class="small muted">I didn't understand that. Try: ${r.suggestions.slice(0, 6).map((s) => `<a href="javascript:void 0" data-cc="${esc(s)}">${esc(s)}</a>`).join(' · ')}</div>`; out.querySelectorAll('[data-cc]').forEach((a) => (a.onclick = () => { p.querySelector('#cc-q').value = a.dataset.cc; })); return; }
       if (r.needsConfirm) { out.innerHTML = `<div class="ss-box"><b>${esc(r.summary)}</b><div class="row" style="gap:8px;margin-top:8px"><button class="btn primary sm" id="cc-yes">Confirm</button><button class="btn sm" id="cc-no">Cancel</button></div></div>`; out.querySelector('#cc-yes').onclick = () => run(text, true); out.querySelector('#cc-no').onclick = () => { out.innerHTML = ''; }; return; }
-      out.innerHTML = `<div class="small">✓ ${esc(r.summary)}${r.note ? ' · ' + esc(r.note) : ''}${r.results ? '<br>' + (r.results.map((x) => `<a href="#/${x.kind === 'note' ? 'memory/' + encodeURIComponent(x.id) : x.kind === 'project' ? 'projects/' + encodeURIComponent(x.id.split('/')[1]) : 'board'}">${esc(x.title)}</a>`).join(' · ') || 'no results') : ''}${r.route ? `<br><span class="muted">Model: ${esc(r.route.model || 'default')} (${esc((r.route.reasons || []).join('; '))})</span>` : ''}</div>`;
+      out.innerHTML = `<div class="small">✓ ${esc(r.summary)}${r.note ? ' · ' + esc(r.note) : ''}${r.groups ? '<br>' + Object.entries(r.groups).filter(([, v]) => v.length).map(([g, v]) => `<b>${esc(g)}</b>: ${v.slice(0, 4).map((y) => esc(y.title)).join(' · ')}`).join('<br>') : ''}${r.results && !r.groups ? '<br>' + (r.results.map((x) => `<a href="#/${x.kind === 'note' ? 'memory/' + encodeURIComponent(x.id) : x.kind === 'project' ? 'projects/' + encodeURIComponent(x.id.split('/')[1]) : 'board'}">${esc(x.title)}</a>`).join(' · ') || 'no results') : ''}${r.route ? `<br><span class="muted">Model: ${esc(r.route.model || 'default')} (${esc((r.route.reasons || []).join('; '))})</span>` : ''}</div>`;
       if (r.reload) setTimeout(() => location.reload(), 600);
       else if (r.go && !r.results) setTimeout(() => { location.hash = r.go; }, 900);
     };
@@ -228,10 +228,36 @@
     draw();
   }
 
+  // ---------------- resume banner, grouped search, permissions, undo ----------------
+  async function resumeBanner() {
+    const main = document.querySelector('#main'); if (!main || main.querySelector('#rs-panel')) return;
+    let d; try { d = await api('/api/recovery'); } catch { return; }
+    if (!d.items.length || main.querySelector('#rs-panel')) return;
+    const p = document.createElement('div'); p.className = 'panel warn-panel'; p.id = 'rs-panel'; p.style.marginBottom = '16px';
+    p.innerHTML = `<b>Unfinished work</b>${d.items.map((r) => `<div class="in-row" style="margin-top:6px"><div style="flex:1" class="small"><b>${esc(r.project)}</b>: ${esc(r.why)} · ${timeAgo(r.at)}</div><button class="btn sm primary" data-rs="${esc(r.project)}">Continue</button></div>`).join('')}`;
+    const head = main.querySelector('.page-head'); if (head && head.nextSibling) head.parentNode.insertBefore(p, head.nextSibling); else main.prepend(p);
+    p.querySelectorAll('[data-rs]').forEach((b) => (b.onclick = async () => { if (!confirm(`Start an agent to continue ${b.dataset.rs} from where it stopped?`)) return; try { const r = await api('/api/command', { method: 'POST', body: { text: `continue my work on ${b.dataset.rs}`, confirm: true } }); toast(r.error || 'Continuing: see Live'); location.hash = '#/live'; } catch (e) { fail(e); } }));
+  }
+  async function permsPanel() {
+    const grid = document.querySelector('.settings-grid'); if (!grid || grid.querySelector('#pm-set')) return;
+    const p = document.createElement('div'); p.className = 'panel'; p.id = 'pm-set'; grid.appendChild(p);
+    const [d, un] = await Promise.all([api('/api/permissions'), api('/api/undo')]);
+    p.innerHTML = `<div class="in-row"><h3 style="margin:0;flex:1">Security &amp; permissions</h3><button class="btn sm estop" id="pm-stop">■ Emergency stop</button></div><p class="small muted">${esc(d.rule)}</p>
+      <div class="small"><b>Agents</b>: ${d.agents.canStart ? 'Cortex may start agents' : 'starting agents is off'} · folders: ${d.agents.folders.length ? d.agents.folders.map(esc).join(', ') : 'none'} · permission mode ${esc(d.agents.permissionMode)} · max ${d.agents.maxMinutes} min per run · AI launch requests ${esc(d.agents.aiLaunchRequests)} · phone approvals ${d.agents.phoneApprovals ? 'on' : 'off'}</div>
+      <div class="small"><b>Research spending</b>: agent requests ${esc(d.research.agentRequests)} · $${d.research.perRunBudget} per run · $${d.research.dailyBudget} per day</div>
+      <div class="small"><b>Devices</b>: phone access ${d.phoneAccess ? 'on' : 'off'} · ${d.devices.map((y) => `${esc(y.name)} (${y.kind}${y.online ? ', online' : ''})`).join(', ') || 'none paired'}</div>
+      <div class="small"><b>Backups</b>: ${d.backups.map((y) => esc(y.name)).join(', ') || 'none'} · <b>Routing</b>: ${esc(d.routing)} · <b>Quality checks block "done"</b>: ${d.qaBlocks ? 'yes' : 'no'}</div>
+      <div class="small muted" style="margin-top:4px">Change these in Agent control, Devices, SmartSave and Fetcher settings. Full audit trail: Live → Timeline → "system".</div>
+      <div class="in-sec"><b class="small">Undo recent changes</b>${un.items.slice(0, 8).map((e) => `<div class="in-row small" style="margin-top:4px"><span style="flex:1">${esc(e.summary)} <span class="in-n">${timeAgo(e.at)}</span></span>${e.canUndo ? `<button class="btn sm ghost" data-un="${esc(e.id)}">Undo</button>` : '<span class="in-n">too large</span>'}</div>`).join('') || '<div class="small muted">Nothing yet.</div>'}
+      <div class="in-n" style="margin-top:6px">Cannot be undone here: ${un.cannotUndo.map(esc).join('; ')}.</div></div>`;
+    p.querySelector('#pm-stop').onclick = async () => { if (!confirm('Stop every running agent, job and research run now?')) return; const r = await api('/api/emergency-stop', { method: 'POST' }); toast(`Stopped ${r.runs} runs, ${r.jobs} jobs, ${r.research} research`); };
+    p.querySelectorAll('[data-un]').forEach((b) => (b.onclick = async () => { try { const r = await api('/api/undo', { method: 'POST', body: { id: b.dataset.un } }); toast('Undone: ' + r.what); p.outerHTML = ''; permsPanel(); } catch (e) { fail(e); } }));
+  }
+
   const wrap = (name, after) => { const orig = window[name]; if (typeof orig !== 'function') return; window[name] = function (...a) { const r = orig.apply(this, a); Promise.resolve(r).then(() => after()).catch((e) => console.warn(name, e)); return r; }; };
-  wrap('renderHome', () => { if (S.route[0] === 'home') { commandPanel(); shortcutsInto(document.querySelector('#cc-panel')); } });
+  wrap('renderHome', () => { if (S.route[0] === 'home') { commandPanel(); shortcutsInto(document.querySelector('#cc-panel')); resumeBanner(); } });
   wrap('renderLive', () => { if (S.route[0] === 'live') return timelinePanel(); });
   wrap('renderAgents', () => { if (S.route[0] === 'agents') { setTimeout(jobFeedback, 1500); return intelPanel(); } });
   wrap('renderSkills', () => { if (S.route[0] === 'skills') return skillVersions(); });
-  wrap('renderSettings', () => { if (S.route[0] === 'settings') { uiPanel(); prefsPanel(); return doctorPanel(); } });
+  wrap('renderSettings', () => { if (S.route[0] === 'settings') { uiPanel(); prefsPanel(); permsPanel(); return doctorPanel(); } });
 })();

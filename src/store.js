@@ -258,7 +258,9 @@ class Store extends EventEmitter {
     if (kind === 'project') this.ensureProjectMemory(slug);
     this.write(rec);
     this.emit('change', { type: 'create', id, kind });
-    return rec;
+    const __created = rec;
+    try { if (['task', 'note', 'project'].includes(kind)) require('./undo').record(this.vault, { op: 'create', kind, itemId: __created.id, summary: `Created ${kind} "${__created.title}"` }); } catch { /* optional */ }
+    return __created;
   }
 
   // ---------- memory scopes ----------
@@ -310,6 +312,8 @@ class Store extends EventEmitter {
 
   update(ref, patch = {}) {
     const rec = this.must(ref);
+    const origId = rec.id;
+    let before = null; try { if (['task', 'note', 'project'].includes(rec.kind)) before = fs.readFileSync(this.fileOf(rec.id), 'utf8'); } catch { /* new */ }
     if (patch.title !== undefined) {
       const t = String(patch.title).trim();
       if (!t) throw new Error('title cannot be empty');
@@ -332,6 +336,7 @@ class Store extends EventEmitter {
     rec.meta = { ...rest, created: created || rec.created, updated: now() };
     this.write(rec);
     const out = this.relocate(rec);
+    if (before !== null) require('./undo').record(this.vault, { op: 'update', kind: rec.kind, itemId: origId, afterId: out.id, before, summary: `Edited ${rec.kind} "${out.title}"${patch.status ? ` (status → ${patch.status})` : ''}` });
     this.emit('change', { type: 'update', id: out.id, kind: out.kind });
     return out;
   }
@@ -340,6 +345,7 @@ class Store extends EventEmitter {
     const rec = this.must(ref);
     const dest = path.join(this.vault, '.cortex', 'trash', `${rec.id.replace(/\//g, '__')}__${Date.now()}.md`);
     try { fs.renameSync(this.fileOf(rec.id), dest); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+    if (['task', 'note', 'project', 'skill'].includes(rec.kind)) require('./undo').record(this.vault, { op: 'delete', kind: rec.kind, itemId: rec.id, trash: dest, summary: `Deleted ${rec.kind} "${rec.title}"` });
     this.items.delete(rec.id);
     this.relink();
     this.emit('change', { type: 'delete', id: rec.id, kind: rec.kind });

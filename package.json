@@ -14,7 +14,7 @@
     "start": "node bin/cortex.js start --open",
     "mcp": "node bin/cortex.js mcp",
     "config": "node bin/cortex.js config",
-    "test": "node test/smoke.js && node test/redact.js && node test/connect.js && node test/models.js && node test/lean.js && node test/fetcher.js && node test/fetcher2.js && node test/fetcher3.js && node test/experience.js && node test/lessons.js && node test/task-fetcher.js && node test/devices.js && node test/smartsave.js && node test/intel.js && node test/context.js && node test/skills-versions.js && node test/forecast.js && node test/doctor.js && node test/userprefs.js && node test/setup.js && node test/restart.js && node test/windows.js && node test/live.js && node test/features.js"
+    "test": "node test/smoke.js && node test/redact.js && node test/connect.js && node test/models.js && node test/lean.js && node test/fetcher.js && node test/fetcher2.js && node test/fetcher3.js && node test/experience.js && node test/lessons.js && node test/task-fetcher.js && node test/devices.js && node test/smartsave.js && node test/intel.js && node test/context.js && node test/skills-versions.js && node test/forecast.js && node test/doctor.js && node test/userprefs.js && node test/orchestra.js && node test/setup.js && node test/restart.js && node test/windows.js && node test/live.js && node test/features.js"
   },
   "engines": {
     "node": ">=18"

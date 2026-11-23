@@ -46,6 +46,7 @@ function load(vault) {
 
 function save(vault, s) {
   fs.mkdirSync(path.dirname(file(vault)), { recursive: true });
+  try { const prev = fs.readFileSync(file(vault), 'utf8'); if (prev !== JSON.stringify(s, null, 2)) require('./undo').record(vault, { op: 'update', kind: 'settings', itemId: 'settings', before: prev, summary: 'Changed settings' }); } catch { /* first save */ }
   const tmp = file(vault) + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(s, null, 2));
   fs.renameSync(tmp, file(vault));
