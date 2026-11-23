@@ -1,7 +1,7 @@
 {
-  "version": "2.1.2",
+  "version": "2.2.0",
   "branch": "main",
   "url": "https://codeload.github.com/w6d8g5tgvy-star/cortex/tar.gz/refs/heads/main",
-  "notes": "Cortex 2.1.2: better answers from memory (search picks the paragraph that actually answers, weighting rare words; the recall hook shows those passages), and the agent journal and activity log now hide secrets (pairing token, connector secret, URL tokens, API keys). Includes everything from 2.1.1.",
-  "date": "2026-11-22T21:17:22.723Z"
+  "notes": "Cortex 2.2: intelligence engine (learns from failures, smart routing, quality checks), command center with plain-English settings, grouped notifications, emergency stop, SmartSave encrypted autosave and cross-device recovery, standby host (a second computer serves Cortex while your main one is off and hands changes back), undo and recovery, sandbox, prompt library, drag-and-drop uploads, welcome tour, troubleshooting doctor, usage forecast, timeline and preferences.",
+  "date": "2026-11-23T03:17:23.407Z"
 }
