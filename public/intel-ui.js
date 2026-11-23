@@ -63,6 +63,7 @@
     const out = p.querySelector('#cc-out');
     const run = async (text, confirm) => {
       let r; try { r = await api('/api/command', { method: 'POST', body: { text, confirm } }); } catch (e) { out.innerHTML = `<div class="small" style="color:var(--bad)">${esc(e.message)}</div>`; return; }
+      uxPush({ type: 'command', ok: r.intent !== 'unknown' });
       if (r.intent === 'unknown') { out.innerHTML = `<div class="small muted">I didn't understand that. Try: ${r.suggestions.slice(0, 6).map((s) => `<a href="javascript:void 0" data-cc="${esc(s)}">${esc(s)}</a>`).join(' · ')}</div>`; out.querySelectorAll('[data-cc]').forEach((a) => (a.onclick = () => { p.querySelector('#cc-q').value = a.dataset.cc; })); return; }
       if (r.needsConfirm) { out.innerHTML = `<div class="ss-box"><b>${esc(r.summary)}</b><div class="row" style="gap:8px;margin-top:8px"><button class="btn primary sm" id="cc-yes">Confirm</button><button class="btn sm" id="cc-no">Cancel</button></div></div>`; out.querySelector('#cc-yes').onclick = () => run(text, true); out.querySelector('#cc-no').onclick = () => { out.innerHTML = ''; }; return; }
       out.innerHTML = `<div class="small">✓ ${esc(r.summary)}${r.note ? ' · ' + esc(r.note) : ''}${r.groups ? '<br>' + Object.entries(r.groups).filter(([, v]) => v.length).map(([g, v]) => `<b>${esc(g)}</b>: ${v.slice(0, 4).map((y) => esc(y.title)).join(' · ')}`).join('<br>') : ''}${r.results && !r.groups ? '<br>' + (r.results.map((x) => `<a href="#/${x.kind === 'note' ? 'memory/' + encodeURIComponent(x.id) : x.kind === 'project' ? 'projects/' + encodeURIComponent(x.id.split('/')[1]) : 'board'}">${esc(x.title)}</a>`).join(' · ') || 'no results') : ''}${r.route ? `<br><span class="muted">Model: ${esc(r.route.model || 'default')} (${esc((r.route.reasons || []).join('; '))})</span>` : ''}</div>`;
@@ -254,10 +255,69 @@
     p.querySelectorAll('[data-un]').forEach((b) => (b.onclick = async () => { try { const r = await api('/api/undo', { method: 'POST', body: { id: b.dataset.un } }); toast('Undone: ' + r.what); p.outerHTML = ''; permsPanel(); } catch (e) { fail(e); } }));
   }
 
+  // ---------------- drag-and-drop files (project page, open task) ----------------
+  document.addEventListener('dragover', (e) => { if (e.dataTransfer && [...(e.dataTransfer.types || [])].includes('Files')) { e.preventDefault(); document.body.classList.add('dz-on'); } });
+  document.addEventListener('dragleave', (e) => { if (!e.relatedTarget) document.body.classList.remove('dz-on'); });
+  document.addEventListener('drop', async (e) => {
+    if (!e.dataTransfer || !e.dataTransfer.files.length) return; e.preventDefault(); document.body.classList.remove('dz-on');
+    const taskId = (document.querySelector('[data-act="send-agent"][data-task]') || {}).dataset?.task;
+    const project = S.route[0] === 'projects' ? S.route[1] : ((document.querySelector('#t-proj') || {}).value || '');
+    for (const f of [...e.dataTransfer.files].slice(0, 10)) {
+      if (f.size > 10 * 1024 * 1024) { toast(`${f.name}: files can be up to 10 MB`, true); continue; }
+      toast(`Uploading ${f.name}…`);
+      try { const r = await fetch('/api/upload', { method: 'POST', headers: { 'X-Filename': encodeURIComponent(f.name), ...(project ? { 'X-Project': project } : {}), ...(taskId ? { 'X-Task': taskId } : {}) }, body: f }); const j = await r.json(); if (!r.ok) throw new Error(j.error); toast(`Added ${j.name}${taskId ? ' to the task' : project ? ' to the project' : ''}`); } catch (err) { fail(err); }
+    }
+    if (typeof refresh === 'function') refresh();
+  });
+  const dz = document.createElement('style'); dz.textContent = 'body.dz-on::after{content:"Drop files to add them (up to 10 MB: text, code, images, PDF)";position:fixed;inset:12px;border:2px dashed rgba(124,92,255,.8);border-radius:18px;display:grid;place-items:center;font:600 18px system-ui;color:#fff;background:rgba(10,8,30,.75);z-index:90;pointer-events:none}'; document.head.appendChild(dz);
+
+  // ---------------- welcome tour (first run; skippable) ----------------
+  async function onboarding() {
+    let ux; try { ux = await api('/api/ux'); } catch { return; }
+    let seen = false; try { seen = localStorage.getItem('cortex.tourDone') === '1'; } catch { /* private */ }
+    if (ux.onboarded || seen || document.getElementById('tour')) return;
+    const steps = [
+      ['Welcome to Cortex', 'Cortex is where your AI agents share memory, tasks and progress. This 4-step tour uses the real buttons. Skip it any time.', null],
+      ['1 · Connect an AI', 'Agents → copy the connection for Claude, ChatGPT or Codex. Once connected they read and write Cortex memory.', '#/agents'],
+      ['2 · Make a project', 'Type "start a project called …" in "Tell Cortex what to do", or use Projects → New.', '#/home'],
+      ['3 · Use it from your phone', 'Settings → Devices → Add a phone, then scan the QR code.', '#/settings'],
+      ['4 · Never lose work', 'On a project page, turn on SmartSave: files are saved automatically and can be restored on another computer.', '#/projects'],
+    ];
+    let i = 0;
+    const box = document.createElement('div'); box.id = 'tour'; box.className = 'ib-pop'; box.style.cssText = 'top:auto;bottom:90px;right:16px';
+    const draw = () => { const [t, d, go] = steps[i]; box.innerHTML = `<b>${esc(t)}</b><div class="small" style="margin:6px 0 10px">${esc(d)}</div><div class="in-row"><button class="btn sm ghost" id="tr-skip">Skip tour</button><span style="flex:1"></span>${go ? `<button class="btn sm" id="tr-go">Show me</button>` : ''}<button class="btn sm primary" id="tr-next">${i === steps.length - 1 ? 'Done' : 'Next'}</button></div>`; const g = box.querySelector('#tr-go'); if (g) g.onclick = () => { location.hash = go; }; box.querySelector('#tr-next').onclick = () => { if (i === steps.length - 1) end(); else { i++; draw(); } }; box.querySelector('#tr-skip').onclick = end; };
+    const end = async () => { box.outerHTML = ''; try { localStorage.setItem('cortex.tourDone', '1'); } catch { /* private */ } try { await api('/api/ux/settings', { method: 'POST', body: { onboarded: true } }); } catch { /* phone */ } };
+    draw(); document.body.appendChild(box);
+  }
+  setTimeout(onboarding, 2500);
+
+  // ---------------- UX metrics (opt-in; counts only) ----------------
+  let uxOn = false; const uxQ = [];
+  api('/api/ux').then((u2) => { uxOn = !!u2.measure; }).catch(() => {});
+  const uxPush = (ev) => { if (!uxOn) return; uxQ.push(ev); if (uxQ.length >= 20) uxFlush(); };
+  const uxFlush = () => { if (!uxQ.length) return; const events = uxQ.splice(0); api('/api/ux', { method: 'POST', body: { events } }).catch(() => {}); };
+  setInterval(uxFlush, 30000); window.addEventListener('beforeunload', uxFlush);
+  window.addEventListener('hashchange', () => uxPush({ type: 'page', key: location.hash.split('/').slice(0, 2).join('/') }));
+  document.addEventListener('click', (e) => { const el = e.target.closest('[id],[data-go]'); if (el) uxPush({ type: 'click', key: el.id || 'nav:' + el.dataset.go }); }, true);
+  window.addEventListener('error', (e) => uxPush({ type: 'error', key: String(e.message || 'error').replace(/[^\w ]/g, '').slice(0, 50).replace(/ /g, '_') }));
+  async function uxPanel() {
+    const grid = document.querySelector('.settings-grid'); if (!grid || grid.querySelector('#ux-set')) return;
+    const p = document.createElement('div'); p.className = 'panel'; p.id = 'ux-set'; grid.appendChild(p);
+    const draw = async () => {
+      const u2 = await api('/api/ux'); const r = u2.report || {};
+      p.innerHTML = `<h3>Help improve Cortex (usability)</h3><label class="small"><input type="checkbox" id="ux-on" ${u2.measure ? 'checked' : ''}> Measure how I use the dashboard: pages, buttons, steps, errors. Only counts, never what you type.</label>
+        ${r.measuring ? `<div class="small" style="margin-top:6px">Since ${new Date(r.since).toLocaleDateString()}: ${r.topPages.map(([k, n]) => `${esc(k)} ${n}×`).join(' · ')}</div>${(r.suggestions || []).map((s) => `<div class="small muted">💡 ${esc(s)}</div>`).join('')}` : ''}
+        <div class="in-row" style="margin-top:8px"><button class="btn sm ghost" id="ux-tour">Show the welcome tour again</button></div>`;
+      p.querySelector('#ux-on').onchange = async (e) => { await api('/api/ux/settings', { method: 'POST', body: { measure: e.target.checked } }); uxOn = e.target.checked; draw(); };
+      p.querySelector('#ux-tour').onclick = async () => { try { localStorage.removeItem('cortex.tourDone'); } catch { /* private */ } await api('/api/ux/settings', { method: 'POST', body: { onboarded: false } }); location.hash = '#/home'; setTimeout(onboarding, 300); };
+    };
+    draw();
+  }
+
   const wrap = (name, after) => { const orig = window[name]; if (typeof orig !== 'function') return; window[name] = function (...a) { const r = orig.apply(this, a); Promise.resolve(r).then(() => after()).catch((e) => console.warn(name, e)); return r; }; };
   wrap('renderHome', () => { if (S.route[0] === 'home') { commandPanel(); shortcutsInto(document.querySelector('#cc-panel')); resumeBanner(); } });
   wrap('renderLive', () => { if (S.route[0] === 'live') return timelinePanel(); });
   wrap('renderAgents', () => { if (S.route[0] === 'agents') { setTimeout(jobFeedback, 1500); return intelPanel(); } });
   wrap('renderSkills', () => { if (S.route[0] === 'skills') return skillVersions(); });
-  wrap('renderSettings', () => { if (S.route[0] === 'settings') { uiPanel(); prefsPanel(); permsPanel(); return doctorPanel(); } });
+  wrap('renderSettings', () => { if (S.route[0] === 'settings') { uiPanel(); prefsPanel(); permsPanel(); uxPanel(); return doctorPanel(); } });
 })();

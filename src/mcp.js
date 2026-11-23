@@ -553,6 +553,19 @@ function buildTools(store) {
       },
     },
     {
+      name: 'sandbox',
+      description: 'Try changes safely on a COPY of a project (no secrets copied, clean environment, time limits, network blocked as far as possible). actions: create {project} → id; run {id, cmd (node|npm|npx|python|pytest|git), args}; diff {id}. Only the user can apply sandbox changes to the real project (dashboard).',
+      inputSchema: { type: 'object', required: ['action'], properties: { action: str('create, run or diff', { enum: ['create', 'run', 'diff'] }), project: str('Project (for create)'), id: str('Sandbox id'), cmd: str('Command'), args: { type: 'array', items: { type: 'string' } } } },
+      run: async (a) => {
+        const sbx = require('./sandbox');
+        if (!settings.load(store.vault).agents.enabled) throw new Error('Agent control is turned off on the main computer.');
+        if (a.action === 'create') { const slug = store.resolveProject(a.project); const p = store.get('projects/' + slug); const root = (settings.load(store.vault).smartsave.projects[slug] || {}).root || (p && p.meta.folder); if (!root) throw new Error('This project has no folder'); const m = sbx.create(root, { name: slug }); return { id: m.id, copied: m.copied, skipped: m.skipped.length }; }
+        if (a.action === 'run') { if (!/^(node|npm|npx|python3?|pytest|git)$/.test(String(a.cmd))) throw new Error('Allowed: node, npm, npx, python, pytest, git'); const r = await sbx.run(a.id, a.cmd, (a.args || []).map(String).slice(0, 30), { timeoutMs: 300000 }); return { code: r.code, timedOut: r.timedOut, ms: r.ms, output: r.out.slice(-6000) }; }
+        if (a.action === 'diff') return sbx.diff(a.id);
+        throw new Error('unknown action');
+      },
+    },
+    {
       name: 'next_task',
       description: 'Get (and claim) the most important open task you can work on: its dependencies are done and no other active agent owns it. Tasks whose agent has been silent for 2+ hours can be taken over. One task at a time.',
       inputSchema: { type: 'object', properties: { project: str('Project slug (optional)'), peek: { type: 'boolean', description: 'Just look, do not claim' } } },

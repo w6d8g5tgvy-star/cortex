@@ -18,6 +18,7 @@ const DEFAULTS = () => ({
   notifications: { off: [], browser: true },
   ui: { mode: 'advanced', hidePanels: [] },
   shortcuts: [],
+  ux: { measure: false, onboarded: false },
   preferences: { forgotten: [] },
   smartsave: { enabled: false, debounceSec: 15, intervalSec: 120, maxFileMB: 25, projects: {}, targets: [], retention: { keepLast: 20, hourly: 48, daily: 30, weekly: 26 }, device: '' },
   fetcher: { maxVideos: 5, team: 3, model: 'sonnet', plannerModel: 'haiku', reviewer: 'claude', codexModel: '', threshold: 60, autoRunAgentRequests: false, usage: 'medium', perRunBudget: 0.25, dailyBudget: 1 },

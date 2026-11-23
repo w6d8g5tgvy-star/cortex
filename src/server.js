@@ -342,6 +342,7 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
       return jobsMod.patch(vault, j.id, { status: 'running', runId: r.id, step: 'Running on this computer', startedAt: new Date().toISOString() });
     } catch (e) { return jobsMod.patch(vault, j.id, { status: 'error', step: e.message }); }
   }
+  async function runner_bin_set(fn) { await runner.available(); fn.bin = runner.bin('claude'); }
   function notifyJob(j) {
     try { const ok = j.status === 'done'; require('./notify').add(vault, { kind: ok ? 'done' : 'failed', title: `${ok ? 'Finished' : j.status === 'stopped' ? 'Stopped' : 'Failed'} on ${j.deviceName}: ${String(j.prompt || j.task || '').slice(0, 80)}`, body: String(j.result || j.step || '').slice(0, 240), ref: j.id, project: j.project }); broadcast({ type: 'notify' }); } catch { /* optional */ }
   }
@@ -815,6 +816,46 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
     // ---- automatic troubleshooting ----
     if (p === '/api/doctor' && m === 'GET') return send(res, 200, await require('./doctor').diagnose({ vault, store, conf, runner, tunnel, smart, claudeHooks, updater }));
     if (p === '/api/doctor/fix' && m === 'POST') { if (!localOnly()) return; const b = await json(); try { const r = await require('./doctor').fix(b.action, { vault, runner, tunnel, smart, claudeHooks, checkUpdates }); store.log({ agent, action: 'doctor.fix', summary: `Troubleshooting: ran "${b.action}"` }); return send(res, 200, r); } catch (e) { return send(res, 400, { error: e.message }); } }
+    // ---- sandbox, prompt library, uploads, UX metrics, onboarding ----
+    if (p === '/api/sandbox' && m === 'GET') return send(res, 200, { sandboxes: require('./sandbox').list() });
+    if (p === '/api/sandbox' && m === 'POST') {
+      if (!localOnly()) return;
+      const b = await json(); const sbx = require('./sandbox');
+      try {
+        if (b.action === 'create') { const slug = store.resolveProject(b.project); const root = smart.ss.projectRoot(slug) || (store.get('projects/' + slug) || { meta: {} }).meta.folder; if (!root) return send(res, 400, { error: 'This project has no folder' }); return send(res, 201, sbx.create(root, { name: b.name || slug })); }
+        if (b.action === 'run') { if (!/^(node|npm|npx|python3?|pytest|git)$/.test(String(b.cmd))) return send(res, 400, { error: 'Allowed commands in the sandbox: node, npm, npx, python, pytest, git' }); return send(res, 200, await sbx.run(b.id, b.cmd, (b.args || []).map(String).slice(0, 30), { timeoutMs: Math.min(600000, Number(b.timeoutMs) || 120000) })); }
+        if (b.action === 'diff') return send(res, 200, sbx.diff(b.id));
+        if (b.action === 'apply') { const m2 = sbx.load(b.id); const slug = Object.keys(smart.ss.state().projects).find((k) => smart.ss.projectRoot(k) === m2.source) || null; const r = sbx.apply(b.id, { approved: b.approved === true, files: b.files, smart: smart.ss, project: slug }); store.log({ agent, action: 'sandbox.apply', summary: `Applied ${r.applied.length} sandbox file(s) to ${m2.source}${r.checkpoint ? ' (SmartSave checkpoint first)' : ''}` }); return send(res, 200, r); }
+        if (b.action === 'destroy') return send(res, 200, sbx.destroy(b.id));
+      } catch (e) { return send(res, 400, { error: e.message }); }
+      return send(res, 400, { error: 'unknown action' });
+    }
+    if (p === '/api/prompts' && m === 'GET') return send(res, 200, { prompts: require('./prompts').list(vault) });
+    if (p === '/api/prompts' && m === 'POST') {
+      if (!localOnly()) return;
+      const b = await json(); const P = require('./prompts');
+      try {
+        if (b.action === 'add') return send(res, 201, P.addVersion(vault, b.name, b.text, { note: b.note, by: agent }));
+        if (b.action === 'compare') {
+          // real model runs (cost money): uses the train ai tasks with hidden tests; capped by maxCostUsd
+          const T = require('../experiments/train-ai/tasks'); const tasks = (b.tasks || ['journal']).map((k) => T[k]).filter(Boolean).map((t, i) => ({ id: (b.tasks || ['journal'])[i], input: t.prompt, score: (text) => t.score(([...String(text).matchAll(/```(?:js|javascript)?\s*\n([\s\S]*?)```/g)].map((x) => x[1]).sort((x, y) => y.length - x.length)[0]) || text) }));
+          const model = agents.cleanModel(b.model) || 'claude-haiku-5-5';
+          const runner = (prompt) => new Promise((resolve) => require('child_process').execFile(runner.bin, ['-p', '--model', model, '--output-format', 'json', '--tools', '', '--', prompt], { cwd: os.tmpdir(), timeout: 240000, maxBuffer: 20 << 20, env: { ...process.env, CORTEX_QUIET: '1' } }, (err, out) => { let j = {}; try { j = JSON.parse(out); } catch { j = {}; } const u2 = j.usage || {}; resolve({ text: String(j.result || ''), tokens: (u2.output_tokens || 0) + (u2.input_tokens || 0), ms: j.duration_ms || 0, cost: Number(j.total_cost_usd || 0) }); }));
+          await runner_bin_set(runner);
+          return send(res, 200, await P.compare(vault, b.name, { versions: b.versions, tasks, runner, trials: Math.min(5, Number(b.trials) || 3), maxCostUsd: Math.min(5, Number(b.maxCostUsd) || 0.25) }));
+        }
+      } catch (e) { return send(res, 400, { error: e.message }); }
+      return send(res, 400, { error: 'unknown action' });
+    }
+    if (p === '/api/upload' && m === 'POST') {
+      const chunks = []; let n = 0;
+      for await (const c of req) { n += c.length; if (n > require('./uploads').MAX) return send(res, 413, { error: 'Files can be up to 10 MB' }); chunks.push(c); }
+      try { const r = require('./uploads').save(store, { name: decodeURIComponent(req.headers['x-filename'] || ''), data: Buffer.concat(chunks), project: req.headers['x-project'] || undefined, task: req.headers['x-task'] || undefined }); store.log({ agent, action: 'file.upload', summary: `Added file ${r.name} (${Math.round(r.size / 1024)} KB)`, project: req.headers['x-project'] || undefined }); return send(res, 201, r); } catch (e) { return send(res, 400, { error: e.message }); }
+    }
+    if (p === '/api/ux' && m === 'POST') { if (!conf().ux.measure) return send(res, 200, { ok: false, measuring: false }); const b = await json(); return send(res, 200, require('./uploads').uxRecord(vault, b.events)); }
+    if (p === '/api/ux' && m === 'GET') return send(res, 200, { ...conf().ux, report: require('./uploads').uxReport(vault) });
+    if (p === '/api/ux/settings' && m === 'POST') { const b = await json(); const next = { ...conf().ux, ...(b.measure !== undefined ? { measure: !!b.measure } : {}), ...(b.onboarded !== undefined ? { onboarded: !!b.onboarded } : {}) }; settingsMod.save(vault, { ...conf(), ux: next }); return send(res, 200, next); }
+
     // ---- undo, recovery, search everywhere, permissions overview ----
     if (p === '/api/undo' && m === 'GET') return send(res, 200, { items: require('./undo').list(vault, 30), cannotUndo: require('./undo').CANNOT });
     if (p === '/api/undo' && m === 'POST') { const b = await json(); try { const r = require('./undo').undo(store, b.id); store.log({ agent, action: 'undo', summary: `Undid: ${r.what}` }); broadcast({ type: 'change' }); return send(res, 200, r); } catch (e) { return send(res, 400, { error: e.message }); } }
