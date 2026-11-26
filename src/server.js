@@ -544,8 +544,10 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
       return send(res, 201, store.toJSON(r));
     }
     if (p === '/api/items' && m === 'PATCH') {
-      const { id, quiet, ...patch } = await json();
+      const { id, quiet, ifUpdated, ...patch } = await json();
       const prevStatus = store.must(id).meta.status;
+      // offline edits replayed later carry the version they were made on: never overwrite a newer change
+      if (ifUpdated && store.toJSON(store.must(id)).updated !== ifUpdated) { const cur = store.toJSON(store.must(id)); return send(res, 409, { error: `"${cur.title}" was changed elsewhere while you were offline, so your change wasn't applied.`, current: cur }); }
       let r = store.update(id, patch);
       if (r.kind === 'task' && patch.status === 'done' && prevStatus !== 'done') { r = runQa(r, String(patch.append || ''), agent); try { require('./orchestra').requestVerification(store, r, agent); } catch { /* optional */ } }
       if (!quiet) {
