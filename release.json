@@ -1,7 +1,7 @@
 {
-  "version": "2.2.0",
+  "version": "2.3.0",
   "branch": "main",
   "url": "https://codeload.github.com/w6d8g5tgvy-star/cortex/tar.gz/refs/heads/main",
-  "notes": "Cortex 2.2: intelligence engine (learns from failures, smart routing, quality checks), command center with plain-English settings, grouped notifications, emergency stop, SmartSave encrypted autosave and cross-device recovery, standby host (a second computer serves Cortex while your main one is off and hands changes back), undo and recovery, sandbox, prompt library, drag-and-drop uploads, welcome tour, troubleshooting doctor, usage forecast, timeline and preferences.",
-  "date": "2026-11-23T03:17:23.407Z"
+  "notes": "Cortex 2.3: Cloud sync (all your computers and cloud AI sessions share one Cortex through a private GitHub repository), Chat with Claude Code or Codex using your project's memory, visual Workflows builder, built-in file editor with version history, offline mode for your phone, Tidy-up suggestions, one-click AI tool sharing between your AI apps, and double-click installers for Windows, Mac and Linux. Fixes the Setup Cortex launcher, broken since 2.1.0.",
+  "date": "2026-11-26T22:37:18.738Z"
 }
