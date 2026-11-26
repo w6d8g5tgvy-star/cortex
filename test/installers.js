@@ -38,6 +38,13 @@ const lanIp = Object.values(os.networkInterfaces()).flat().find((a) => a && a.fa
   assert.equal(fs.readFileSync(path.join(repo, 'install-cortex.sh'), 'utf8'), inst.build('linux', {}).body.toString());
   ok('installers: Windows (.cmd), Mac (.command in a zip, still executable), Linux (.sh); valid scripts; only a one-time code inside; nothing injectable');
 
+  // ---------- `cortex setup` (what the installers and Setup Cortex.bat run) must work ----------
+  { const home = path.join(T, 'sethome'); const nb = path.join(T, 'nodeonly'); fs.mkdirSync(nb); fs.symlinkSync(process.execPath, path.join(nb, 'node'));
+    const r = spawnSync(process.execPath, [path.join(__dirname, '..', 'bin', 'cortex.js'), 'setup', '--vault', path.join(T, 'setv'), '--no-screen', '--no-autostart'], { env: { ...process.env, HOME: home, USERPROFILE: home, APPDATA: path.join(home, 'AppData'), PATH: nb }, timeout: 60000 });
+    const out = r.stdout.toString() + r.stderr.toString();
+    assert.equal(r.status, 0, out); assert.match(out, /Cortex setup/); assert.match(out, /Cortex settings/); assert.ok(!/is not a function/.test(out));
+    ok('`cortex setup` runs (it was broken when Fetcher 2 replaced src/setup.js; restored as src/appsetup.js)'); }
+
   // ---------- server ----------
   const v = path.join(T, 'v'); new Store(v);
   fs.mkdirSync(path.join(v, '.cortex'), { recursive: true }); fs.writeFileSync(path.join(v, '.cortex', 'settings.json'), JSON.stringify({ remote: { enabled: true, token: 'tok-abcdefghijk' } }));

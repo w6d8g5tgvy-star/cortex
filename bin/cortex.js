@@ -159,7 +159,7 @@ async function main() {
   }
 
   if (cmd === 'setup') {
-    const results = require('../src/setup').run(vault, { phone: !has('no-phone'), screen: !has('no-screen'), autostart: !has('no-autostart') });
+    const results = require('../src/appsetup').run(vault, { phone: !has('no-phone'), screen: !has('no-screen'), autostart: !has('no-autostart') });
     const icon = { ok: '✓', skip: '–', fail: '✗' };
     console.log('\n  ◆ Cortex setup\n');
     for (const r of results) console.log(`  ${icon[r.status]} ${r.name.padEnd(16)} ${r.msg}`);
