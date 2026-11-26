@@ -906,6 +906,40 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
       } catch (e) { return send(res, 400, { error: e.message }); }
       return send(res, 400, { error: 'unknown action' });
     }
+    if (p === '/api/files/settings' && m === 'POST') { if (!local) return send(res, 403, { error: 'This can only be changed on your main computer' }); const b = await json(); const next = { ...(conf().files || {}), remoteEdit: !!b.remoteEdit }; settingsMod.save(vault, { ...conf(), files: next }); store.log({ agent, action: 'settings.files', summary: `Editing project files from other devices turned ${next.remoteEdit ? 'on' : 'off'}` }); return send(res, 200, next); }
+    // ---- built-in file editor (#35): a project's own folder, which must be an allowed folder ----
+    if (p === '/api/files') {
+      const fe = require('./fileeditor');
+      const q = m === 'GET' ? Object.fromEntries(u.searchParams) : await json();
+      const proj = q.project ? store.get('projects/' + String(q.project).replace(/[^\w-]/g, '')) : null;
+      if (!proj) return send(res, 404, { error: 'Project not found' });
+      const root = proj.meta.folder;
+      if (!root || !fs.existsSync(root)) return send(res, 400, { error: 'This project has no folder yet. Set its folder on the project page first.' });
+      if (!agents.folderAllowed(root, conf().agents.folders)) return send(res, 403, { error: 'This project\'s folder isn\'t one of the allowed folders (Settings → Agent control on your main computer).' });
+      const canEdit = local || !!(conf().files && conf().files.remoteEdit);
+      try {
+        if (m === 'GET') {
+          if (q.op === 'read') return send(res, 200, { ...fe.read(root, q.path), canEdit });
+          if (q.op === 'search') return send(res, 200, fe.search(root, q.q));
+          if (q.op === 'history') return send(res, 200, { versions: fe.history(vault, proj.slug, fe.resolve(root, q.path).rel) });
+          if (q.op === 'diff') { const r = fe.resolve(root, q.path).rel; const cur = fe.read(root, r).text; const old = fe.version(vault, proj.slug, r, q.id); return send(res, 200, fe.diff(old, cur)); }
+          return send(res, 200, { ...fe.tree(root), canEdit, folder: path.basename(root) });
+        }
+        if (!canEdit) return send(res, 403, { error: 'Editing project files from other devices is turned off. Turn on "Allow editing project files from my phone" in Settings on your main computer.' });
+        if (q.action === 'save' || q.action === 'create') {
+          const r = fe.write(vault, proj.slug, root, q.path, q.text, { baseMtimeMs: q.action === 'save' ? q.baseMtimeMs : undefined, create: q.action === 'create', by: agent });
+          if (!r.unchanged) store.log({ agent, action: 'file.edit', summary: `${r.created ? 'Created' : 'Edited'} ${r.path} in ${proj.title}`, project: proj.slug });
+          return send(res, 200, r);
+        }
+        if (q.action === 'restore') {
+          const rel = fe.resolve(root, q.path).rel; const old = fe.version(vault, proj.slug, rel, q.id); const cur = fe.read(root, rel);
+          const r = fe.write(vault, proj.slug, root, rel, old, { baseMtimeMs: cur.mtimeMs, by: agent });
+          store.log({ agent, action: 'file.restore', summary: `Restored an earlier version of ${rel} in ${proj.title}`, project: proj.slug });
+          return send(res, 200, { ...r, text: old });
+        }
+        return send(res, 400, { error: 'Unknown action' });
+      } catch (e) { return send(res, e.status || 400, { error: e.message, ...(e.current ? { current: e.current } : {}) }); }
+    }
     if (p === '/api/chat' && m === 'GET') {
       const id = u.searchParams.get('id');
       if (id) { const c = chatMod.get(vault, id); return c ? send(res, 200, { conversation: c }) : send(res, 404, { error: 'Conversation not found' }); }
@@ -1340,6 +1374,7 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
         screen: s.screen,
         remote: { enabled: s.remote.enabled, listening: host, ...(local ? { token: tokenNow(), addresses: [...lanAddresses(port), ...(tunnel.url ? [{ ip: new URL(tunnel.url).host, kind: 'public', url: tunnel.url }] : [])] } : {}) },
         supervised: !!process.env.CORTEX_SUPERVISED,
+        files: { remoteEdit: !!(s.files && s.files.remoteEdit) },
         claudeHooks: local ? claudeHooks.status() : undefined,
         instructions: local ? require('./instructions').status() : undefined,
         agents: { enabled: s.agents.enabled, folders: s.agents.folders, permission: s.agents.permission, maxMinutes: s.agents.maxMinutes, instructions: s.agents.instructions || '', saveGate: s.agents.saveGate !== false, phoneApprovals: !!s.agents.phoneApprovals },

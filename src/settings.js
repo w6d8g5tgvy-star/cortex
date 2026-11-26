@@ -18,6 +18,7 @@ const DEFAULTS = () => ({
   notifications: { off: [], browser: true },
   ui: { mode: 'advanced', hidePanels: [] },
   shortcuts: [],
+  files: { remoteEdit: false }, // phones/other devices may read project files; editing them needs this turned on
   ux: { measure: false, onboarded: false },
   preferences: { forgotten: [] },
   smartsave: { enabled: false, debounceSec: 15, intervalSec: 120, maxFileMB: 25, projects: {}, targets: [], retention: { keepLast: 20, hourly: 48, daily: 30, weekly: 26 }, device: '' },

@@ -115,4 +115,4 @@ function safeRel(rel) {
   return !r.split(/[\\/]/).some((seg) => seg === '..' || seg === '');
 }
 
-module.exports = { scan, secretIn, safeRel, gitignoreRules, ignored, SKIP_DIRS };
+module.exports = { scan, secretIn, safeRel, gitignoreRules, ignored, SKIP_DIRS, SECRET_DIRS, SECRET_NAME };
