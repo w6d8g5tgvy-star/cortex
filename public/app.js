@@ -35,7 +35,7 @@ const PALETTE = ['#8b7cf6', '#4f9cf9', '#3fc5d6', '#3ecf8e', '#f5b84b', '#f2676b
 const NAV = [
   ['home', 'Home', 'i-home', 'Workspace'], ['projects', 'Projects', 'i-projects'], ['board', 'Board', 'i-board'],
   ['memory', 'Memory vault', 'i-memory', 'Knowledge'], ['graph', 'Neural map', 'i-graph'], ['mind', 'Mind', 'i-mind'], ['fetcher', 'Fetcher', 'i-fetch'], ['skills', 'Skills', 'i-skills'],
-  ['live', 'Live', 'i-live', 'Agents'], ['agents', 'Agents', 'i-agents'], ['settings', 'Settings', 'i-settings'],
+  ['live', 'Live', 'i-live', 'Agents'], ['agents', 'Agents', 'i-agents'], ['workflows', 'Workflows', 'i-bolt'], ['settings', 'Settings', 'i-settings'],
 ];
 
 const S = { projects: [], tasks: [], notes: [], activity: [], stats: {}, vault: '', config: null, online: true, route: ['home'], seenActivity: null };
@@ -180,7 +180,7 @@ function render() {
   if (v !== 'graph') stopGraph();
   if (v !== 'live') { stopScreen(); stopAiWindows(); }
   if (render.last !== v) { main.classList.remove('view-in'); void main.offsetWidth; main.classList.add('view-in'); render.last = v; }
-  ({ mind: renderMind, fetcher: renderFetcher, skills: renderSkills, live: renderLive, home: renderHome, projects: renderProjects, board: renderBoard, memory: renderMemory, graph: renderGraph, agents: renderAgents, settings: renderSettings }[v])();
+  ({ mind: renderMind, fetcher: renderFetcher, skills: renderSkills, live: renderLive, home: renderHome, projects: renderProjects, board: renderBoard, memory: renderMemory, graph: renderGraph, agents: renderAgents, workflows: () => (window.renderWorkflows ? window.renderWorkflows() : null), settings: renderSettings }[v])();
 }
 
 // ---------- data ----------

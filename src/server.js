@@ -342,6 +342,39 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
       return jobsMod.patch(vault, j.id, { status: 'running', runId: r.id, step: 'Running on this computer', startedAt: new Date().toISOString() });
     } catch (e) { return jobsMod.patch(vault, j.id, { status: 'error', step: e.message }); }
   }
+  // ---------------- workflows (#34) ----------------
+  const wfMod = require('./workflows');
+  // An agent step: start a normal agent run (Cortex brief, allowed folder, permission mode, time limit) and wait for it.
+  function wfLaunchAgent({ prompt, tool, model, project, task, maxMinutes }) {
+    const s = conf().agents;
+    if (!s.enabled) return Promise.resolve({ status: 'error', result: 'Starting agents is turned off (Settings → Agent control).' });
+    const proj = project ? store.get('projects/' + project) : null;
+    const cwd = (proj && proj.meta.folder && agents.folderAllowed(proj.meta.folder, s.folders) && proj.meta.folder) || s.folders[0];
+    if (!cwd || !agents.folderAllowed(cwd, s.folders)) return Promise.resolve({ status: 'error', result: 'Add an allowed folder first (Settings → Agent control).' });
+    let r;
+    try { const pick = agents.pickAgent(proj && proj.meta, tool, model); r = runner.launch({ ...pick, prompt, cwd, permission: s.permission, maxMinutes: Math.min(maxMinutes || 30, s.maxMinutes || 120), project: proj ? proj.slug : undefined, task: task || undefined, from: 'workflow' }); }
+    catch (e) { return Promise.resolve({ status: 'error', result: e.message }); }
+    broadcast({ type: 'live' });
+    return new Promise((resolve) => {
+      const iv = setInterval(() => { const ss = sessions.get(vault, r.id) || {}; if (!runner.running().includes(r.id) && ['done', 'error'].includes(ss.status)) { clearInterval(iv); resolve({ status: ss.status, result: ss.result || ss.step || '', runId: r.id }); } }, 1500);
+      iv.unref();
+    });
+  }
+  const wfDeps = { store, launchAgent: wfLaunchAgent, notify: (v, n) => { try { require('./notify').add(v, n); broadcast({ type: 'notifications' }); } catch { /* optional */ } } };
+  const wfStart = (wf, opts) => wfMod.start(vault, wf, opts, wfDeps).then((run) => { broadcast({ type: 'workflows' }); return run; }).catch((e) => store.log({ agent: 'cortex', action: 'workflow.error', summary: `Workflow could not start: ${e.message}` }));
+  const wfDone = new Set(store.list('task').filter((t) => t.meta.status === 'done').map((t) => t.id));
+  store.on('change', (ev) => {
+    if (!ev || ev.kind !== 'task' || !['create', 'update'].includes(ev.type)) return;
+    const t = store.get(ev.id); if (!t) return;
+    const item = { id: t.id, title: t.title, body: t.body, project: t.meta.project, priority: t.meta.priority, status: t.meta.status };
+    if (ev.type === 'create') for (const wf of wfMod.matching(vault, 'task.created', item)) wfStart(wf, { trigger: item, by: 'task.created' });
+    if (t.meta.status === 'done' && !wfDone.has(t.id)) { wfDone.add(t.id); for (const wf of wfMod.matching(vault, 'task.done', item)) wfStart(wf, { trigger: item, by: 'task.done' }); }
+    else if (t.meta.status !== 'done') wfDone.delete(t.id);
+  });
+  const wfLast = {};
+  setInterval(() => { for (const wf of wfMod.due(vault, wfLast)) { wfLast[wf.id] = Date.now(); const tr = wf.nodes.find((n) => n.type === 'trigger').config || {}; wfStart(wf, { trigger: { project: tr.project || undefined }, by: 'schedule' }); } }, 60000).unref();
+  for (const wf of wfMod.list(vault)) wfLast[wf.id] = Date.now(); // schedules count from start-up, never all at once
+
   async function runner_bin_set(fn) { await runner.available(); fn.bin = runner.bin('claude'); }
   function notifyJob(j) {
     try { const ok = j.status === 'done'; require('./notify').add(vault, { kind: ok ? 'done' : 'failed', title: `${ok ? 'Finished' : j.status === 'stopped' ? 'Stopped' : 'Failed'} on ${j.deviceName}: ${String(j.prompt || j.task || '').slice(0, 80)}`, body: String(j.result || j.step || '').slice(0, 240), ref: j.id, project: j.project }); broadcast({ type: 'notify' }); } catch { /* optional */ }
@@ -842,6 +875,24 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
       } catch (e) { return send(res, 400, { error: e.message }); }
       return send(res, 400, { error: 'unknown action' });
     }
+    if (p === '/api/workflows' && m === 'GET') return send(res, 200, { workflows: wfMod.list(vault), templates: wfMod.TEMPLATES, types: wfMod.NODE_TYPES, triggers: wfMod.TRIGGERS, tools: wfMod.TOOLS, ops: wfMod.OPS, limits: wfMod.DEFAULT_LIMITS, runs: wfMod.runs(vault, { limit: 30 }) });
+    if (p === '/api/workflows' && m === 'POST') {
+      const b = await json();
+      if (b.action === 'validate') return send(res, 200, wfMod.validate(b.workflow || {}));
+      if (b.action === 'delete') { const ok = wfMod.remove(vault, b.id); return send(res, ok ? 200 : 404, { ok }); }
+      if (b.action === 'run' || b.action === 'test') {
+        const wf = b.workflow || wfMod.get(vault, b.id); if (!wf) return send(res, 404, { error: 'Workflow not found' });
+        try { const run = await wfMod.start(vault, wf, { trigger: b.trigger || {}, test: b.action === 'test', testApprove: b.testApprove !== false, by: agent }, wfDeps); store.log({ agent, action: b.action === 'test' ? 'workflow.test' : 'workflow.run', summary: `${b.action === 'test' ? 'Tested' : 'Ran'} workflow "${wf.name}": ${run.status}${run.error ? ` (${run.error})` : ''}` }); broadcast({ type: 'workflows' }); return send(res, 200, { run }); }
+        catch (e) { return send(res, 400, { error: e.message }); }
+      }
+      if (b.action === 'approve' || b.action === 'reject') {
+        try { const run = await wfMod.decide(vault, b.run, b.action === 'approve', wfDeps, { by: agent, note: b.note }); broadcast({ type: 'workflows' }); return send(res, 200, { run }); } catch (e) { return send(res, 400, { error: e.message }); }
+      }
+      if (b.action === 'cancel') { try { return send(res, 200, { run: wfMod.cancel(vault, b.run, agent) }); } catch (e) { return send(res, 404, { error: e.message }); } }
+      try { const r = wfMod.save(vault, b.workflow || {}); store.log({ agent, action: 'workflow.save', summary: `Saved workflow "${r.workflow.name}" (version ${r.workflow.version})` }); broadcast({ type: 'workflows' }); return send(res, 200, r); }
+      catch (e) { return send(res, 400, { error: e.message, validation: e.validation }); }
+    }
+    if (p === '/api/workflows/run' && m === 'GET') { const r = wfMod.getRun(vault, u.searchParams.get('id')); return r ? send(res, 200, { run: r }) : send(res, 404, { error: 'Run not found' }); }
     if (p === '/api/prompts' && m === 'GET') return send(res, 200, { prompts: require('./prompts').list(vault) });
     if (p === '/api/prompts' && m === 'POST') {
       if (!localOnly()) return;
