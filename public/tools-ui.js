@@ -44,3 +44,33 @@
   const wrap = (name, after) => { const orig = window[name]; if (typeof orig !== 'function') return; window[name] = function (...a) { const r = orig.apply(this, a); Promise.resolve(r).then(() => after()).catch((e) => console.warn(name, e)); return r; }; };
   wrap('renderSettings', panel);
 })();
+
+// Cortex 2.3: Cloud sync panel. One vault shared by all your computers through a private Git repository.
+(() => {
+  async function panel() {
+    if (S.route[0] !== 'settings') return;
+    const grid = document.querySelector('.settings-grid'); if (!grid || grid.querySelector('#cs-set')) return;
+    const p = document.createElement('div'); p.className = 'panel'; p.id = 'cs-set'; grid.prepend(p);
+    draw(p);
+  }
+  async function draw(p) {
+    let d; try { d = await api('/api/cloudsync'); } catch (e) { p.innerHTML = `<h3>Cloud sync</h3><div class="small muted">${esc(e.message)}</div>`; return; }
+    const s = d.status || {};
+    const state = !d.enabled ? '<span class="tm-n">Off</span>' : s.ok === false ? `<span style="color:#ff7a90">Problem: ${esc(s.error || '')}</span>` : s.at ? `<span class="tm-y">✓ Synced ${timeAgo(s.at)}</span>${s.changed ? ` · ${s.changed} change(s) came in` : ''}` : 'Starting…';
+    p.innerHTML = `<h3>Cloud sync <span class="small muted">(all your computers, one Cortex)</span></h3>
+      <p class="small muted" style="margin:2px 0 8px">Keep this Cortex's memories, tasks, projects and skills in a <b>private</b> GitHub repository, so your other computers (and AI sessions in the cloud) work on the same Cortex, even when this computer is off. Settings and device keys never leave this computer. If the same note is changed on two computers, both versions are kept.</p>
+      ${!d.git ? '<p class="small" style="color:#ffc35c">Git isn\'t installed on this computer. Install <a href="https://git-scm.com/downloads" target="_blank" rel="noopener">Git</a> first (Windows: "Git for Windows", keep the defaults).</p>' : ''}
+      ${S.local ? `<div class="small" style="margin-bottom:6px">1. On github.com, create a new <b>private</b> repository (for example <code>cortex-vault</code>), empty. 2. Paste its address here and turn it on. 3. Do the same on your other computer with the <b>same</b> address.</div>
+      <div class="in-row"><input id="cs-remote" class="input" style="flex:1;min-width:220px" placeholder="https://github.com/you/cortex-vault.git" value="${esc(d.remote || '')}"><input id="cs-dev" class="input" style="width:150px" placeholder="This computer's name" value="${esc(d.device || '')}"></div>
+      <div class="in-row" style="margin-top:8px"><button class="btn sm" id="cs-on">${d.enabled ? 'Save' : 'Turn on'}</button>${d.enabled ? '<button class="btn sm ghost" id="cs-off">Turn off</button><button class="btn sm ghost" id="cs-now">Sync now</button>' : ''}<span class="small" id="cs-st">${state}</span></div>
+      <p class="small muted" style="margin-top:6px">The first time, Git may open a GitHub sign-in window: that's GitHub's own sign-in, Cortex never sees your password.</p>`
+      : `<div class="small">${state}</div>${d.enabled ? '<button class="btn sm ghost" id="cs-now" style="margin-top:6px">Sync now</button>' : ''}`}
+      ${(s.conflicts || []).length ? `<div class="small" style="margin-top:6px;color:#ffc35c">Changed on two computers (both kept): ${s.conflicts.slice(0, 5).map((c) => esc(c.savedAs)).join(', ')}</div>` : ''}`;
+    const go = async (body, msg) => { const st = p.querySelector('#cs-st'); if (st) st.textContent = 'Syncing…'; try { const r = await api('/api/cloudsync', { method: 'POST', body }); toast(r.status && r.status.ok === false ? 'Cloud sync: ' + r.status.error : msg); } catch (e) { fail(e); } draw(p); };
+    const on = p.querySelector('#cs-on'); if (on) on.onclick = () => go({ enabled: true, remote: p.querySelector('#cs-remote').value.trim(), device: p.querySelector('#cs-dev').value.trim() }, 'Cloud sync is on');
+    const off = p.querySelector('#cs-off'); if (off) off.onclick = () => go({ enabled: false }, 'Cloud sync is off');
+    const now = p.querySelector('#cs-now'); if (now) now.onclick = () => go({ action: 'sync' }, 'Synced');
+  }
+  const wrap = (name, after) => { const orig = window[name]; if (typeof orig !== 'function') return; window[name] = function (...a) { const r = orig.apply(this, a); Promise.resolve(r).then(() => after()).catch((e) => console.warn(name, e)); return r; }; };
+  wrap('renderSettings', panel);
+})();

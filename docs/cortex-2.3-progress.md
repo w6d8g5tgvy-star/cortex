@@ -15,6 +15,8 @@ note (`notes/cortex/cortex-2-2-master-implementation-checklist`) when Cortex is 
 | 20 | Effortless device setup | `src/installers.js`, `installers/`. One-file installers for Windows (.cmd), Mac (.command in a .zip) and Linux (.sh): they install Node.js if needed, download Cortex and set it to start at login. "Add a computer" gives a link with a one-time code: the installer pairs first, then sets up the runner or standby. The Linux installer is tested end to end | `test/installers.js` (4) |
 | 15 | Universal AI tool manager | `src/toolmanager.js`, `public/tools-ui.js`. Lists the MCP servers across Claude Desktop, Claude Code, Cursor, Windsurf and Codex, health-checks them over a real MCP handshake, and shares a server to other apps in one click. Cortex never stores or shows keys and removes only what it added. Also shows local tools and whether API keys are set | `test/toolmanager.js` (5) |
 
+| (new) | Cloud sync | `src/cloudsync.js`, panel in Settings. One vault shared by all computers and cloud sessions through a private Git repo (free on GitHub). Syncs every 5 minutes and 20 seconds after a change. Edits on two computers keep both versions; timestamp-only differences are ignored. `.cortex` (settings, keys) is never uploaded; tokens in the address are refused. The Windows installer adds Git | `test/cloudsync.js` (5) |
+
 ## Bug fixed
 - `cortex setup` (run by "Setup Cortex.bat/.command" and the new installers) was broken from 2.1.0 to 2.2.0. The Fetcher 2 merge replaced `src/setup.js`, which caused "run is not a function". The original setup code is restored as `src/appsetup.js`, with a regression test. **It should be released soon (2.2.1 or 2.3.0).**
 
@@ -24,4 +26,4 @@ note (`notes/cortex/cortex-2-2-master-implementation-checklist`) when Cortex is 
 - Before/after performance comparison and release notes.
 
 ## Test status (cloud container, `xvfb-run -a npm test`)
-35 suites pass. These are build and test results. Real-app checks on the user's computers haven't been done (Windows and Mac installers were checked for structure only; the Linux installer ran end to end).
+36 suites pass. These are build and test results. Real-app checks on the user's computers haven't been done (Windows and Mac installers were checked for structure only; the Linux installer ran end to end).

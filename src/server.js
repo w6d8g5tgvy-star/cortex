@@ -448,6 +448,9 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
   // automatic tidy-up, only for the kinds the user allowed (Settings or the Tidy up panel); every 6 hours
   setInterval(() => { try { const kinds = (conf().organize || {}).auto || []; if (kinds.length) { const done = require('./organize').autoRun(store, kinds); if (done.length) broadcast({ type: 'change' }); } } catch (e) { console.warn('auto tidy-up:', e.message); } }, 6 * 3600e3).unref();
 
+  // cloud sync (2.3): one vault shared by all computers through a private Git repository
+  const cloud = require('./cloudsync').startService({ vault, store, conf, log: (m) => store.log({ agent: 'cortex', action: 'cloudsync', summary: m }), onSynced: (r) => { broadcast({ type: 'change' }); if (r.changed.length) store.log({ agent: 'cortex', action: 'cloudsync.in', summary: `Cloud sync brought in ${r.changed.length} change(s) from your other computers${r.conflicts.length ? `; kept both versions of ${r.conflicts.length} file(s)` : ''}` }); } });
+
   async function runner_bin_set(fn) { await runner.available(); fn.bin = runner.bin('claude'); }
   function notifyJob(j) {
     try { const ok = j.status === 'done'; require('./notify').add(vault, { kind: ok ? 'done' : 'failed', title: `${ok ? 'Finished' : j.status === 'stopped' ? 'Stopped' : 'Failed'} on ${j.deviceName}: ${String(j.prompt || j.task || '').slice(0, 80)}`, body: String(j.result || j.step || '').slice(0, 240), ref: j.id, project: j.project }); broadcast({ type: 'notify' }); } catch { /* optional */ }
@@ -962,6 +965,20 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
         if (b.action === 'unshare') { const r = tm.unshare(vault, String(b.name || ''), String(b.app || ''), { claudeBin }); store.log({ agent, action: 'tools.unshare', summary: `Removed MCP server "${b.name}" from ${b.app} (Cortex had added it)` }); return send(res, 200, r); }
         return send(res, 400, { error: 'Unknown action' });
       } catch (e) { return send(res, 400, { error: e.message }); }
+    }
+    // ---- cloud sync ----
+    if (p === '/api/cloudsync' && m === 'GET') { const c = conf().cloudSync || {}; return send(res, 200, { enabled: !!c.enabled, remote: local ? c.remote : (c.remote ? require('./cloudsync').redact(c.remote) : ''), branch: c.branch || 'main', intervalMin: c.intervalMin || 5, device: c.device || os.hostname(), git: await require('./cloudsync').available(), status: cloud.status() }); }
+    if (p === '/api/cloudsync' && m === 'POST') {
+      const b = await json();
+      if (b.action === 'sync') { const r = await cloud.run('manual'); return send(res, 200, { status: cloud.status(), result: r }); }
+      if (!local) return send(res, 403, { error: 'Cloud sync is set up on each computer itself.' });
+      const cs = require('./cloudsync'); const cur = conf().cloudSync || {};
+      const next = { ...cur, ...(b.remote !== undefined ? { remote: String(b.remote).trim() } : {}), ...(b.enabled !== undefined ? { enabled: !!b.enabled } : {}), ...(b.device !== undefined ? { device: String(b.device).replace(/[^\w -]/g, '').slice(0, 30) } : {}), ...(b.intervalMin ? { intervalMin: Math.min(60, Math.max(1, Number(b.intervalMin))) } : {}) };
+      if (next.enabled) { if (!cs.validRemote(next.remote)) return send(res, 400, { error: 'Enter the HTTPS address of a private repository, e.g. https://github.com/you/cortex-vault.git' }); if (/[^@/]+:[^@/]+@/.test(next.remote)) return send(res, 400, { error: 'Don\'t put a password or token in the address. Sign in to GitHub on this computer instead (Git asks once).' }); }
+      settingsMod.save(vault, { ...conf(), cloudSync: next }); cloud.schedule();
+      store.log({ agent, action: 'settings.cloudsync', summary: next.enabled ? `Cloud sync turned on (${cs.redact(next.remote)})` : 'Cloud sync turned off' });
+      const r = next.enabled ? await cloud.run('turned on') : null;
+      return send(res, 200, { status: cloud.status(), result: r });
     }
     // ---- automatic project organization (#33) ----
     if (p === '/api/organize' && m === 'GET') { const org = require('./organize'); return send(res, 200, { suggestions: org.suggest(store), kinds: org.KINDS, safeAuto: org.SAFE_AUTO, auto: (conf().organize || {}).auto || [], history: org.history(vault) }); }

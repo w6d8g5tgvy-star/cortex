@@ -26,6 +26,7 @@ winget install -e --id OpenJS.NodeJS.LTS --silent --accept-source-agreements --a
 set "PATH=%ProgramFiles%\nodejs;%PATH%"
 where node >nul 2>nul || (echo. & echo  Node.js could not be installed automatically. Install the LTS version from nodejs.org, then run this installer again. & start https://nodejs.org & pause & exit /b 1)
 :havenode
+where git >nul 2>nul || (echo  Installing Git, used by Cloud sync... & winget install -e --id Git.Git --silent --accept-source-agreements --accept-package-agreements >nul 2>nul)
 for /f "delims=" %%i in ('where node') do (set "NODE=%%i" & goto gotnode)
 :gotnode
 echo [3/4] Downloading Cortex...
