@@ -950,6 +950,19 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
       } catch (e) { return send(res, 400, { error: e.message }); }
       return send(res, 400, { error: 'unknown action' });
     }
+    // ---- universal AI tool manager (#15): this computer's AI apps and their MCP servers (main computer only) ----
+    if (p === '/api/tools' && m === 'GET') { if (!local) return send(res, 403, { error: 'Tools are managed on your main computer.' }); const tm = require('./toolmanager'); return send(res, 200, { ...tm.inventory(vault), local: tm.localTools() }); }
+    if (p === '/api/tools' && m === 'POST') {
+      if (!local) return send(res, 403, { error: 'Tools are managed on your main computer.' });
+      const tm = require('./toolmanager'); const b = await json();
+      await runner.available(); const claudeBin = runner.resolved && runner.resolved.claude;
+      try {
+        if (b.action === 'check') return send(res, 200, await tm.check(String(b.name || ''), String(b.app || '')));
+        if (b.action === 'share') { const r = tm.share(vault, String(b.name || ''), String(b.from || ''), b.to || [], { claudeBin }); store.log({ agent, action: 'tools.share', summary: `Shared MCP server "${b.name}" from ${b.from} to ${r.filter((x) => x.ok).map((x) => x.app).join(', ') || 'no app'}` }); return send(res, 200, { results: r }); }
+        if (b.action === 'unshare') { const r = tm.unshare(vault, String(b.name || ''), String(b.app || ''), { claudeBin }); store.log({ agent, action: 'tools.unshare', summary: `Removed MCP server "${b.name}" from ${b.app} (Cortex had added it)` }); return send(res, 200, r); }
+        return send(res, 400, { error: 'Unknown action' });
+      } catch (e) { return send(res, 400, { error: e.message }); }
+    }
     // ---- automatic project organization (#33) ----
     if (p === '/api/organize' && m === 'GET') { const org = require('./organize'); return send(res, 200, { suggestions: org.suggest(store), kinds: org.KINDS, safeAuto: org.SAFE_AUTO, auto: (conf().organize || {}).auto || [], history: org.history(vault) }); }
     if (p === '/api/organize' && m === 'POST') {
