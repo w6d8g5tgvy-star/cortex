@@ -3,8 +3,8 @@
 // (projects, tasks, memories list, activity, chats, workflows, notifications). Changes are queued by the page
 // (offline-ui.js), never by this worker. Only answers without keys or tokens are cached (an allow-list), and cache
 // keys never contain a pairing token.
-const CACHE = 'cortex-offline-v1';
-const SHELL = ['/', '/index.html', '/app.css', '/app.js', '/fetcher-ui.js', '/devices-ui.js', '/smartsave-ui.js', '/intel-ui.js', '/workflows-ui.js', '/chat-ui.js', '/files-ui.js', '/offline-ui.js', '/manifest.webmanifest', '/icon.svg', '/icon-192.png'];
+const CACHE = 'cortex-offline-v2';
+const SHELL = ['/', '/index.html', '/app.css', '/app.js', '/fetcher-ui.js', '/devices-ui.js', '/smartsave-ui.js', '/intel-ui.js', '/workflows-ui.js', '/chat-ui.js', '/files-ui.js', '/organize-ui.js', '/offline-ui.js', '/manifest.webmanifest', '/icon.svg', '/icon-192.png'];
 // Read-only API answers that are useful offline. Settings, devices, pairing, files and anything else are never cached.
 const API_OK = new Set(['/api/state', '/api/item', '/api/activity', '/api/chat', '/api/workflows', '/api/notifications', '/api/timeline', '/api/briefing', '/api/health']);
 

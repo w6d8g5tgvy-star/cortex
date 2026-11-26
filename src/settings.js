@@ -18,6 +18,7 @@ const DEFAULTS = () => ({
   notifications: { off: [], browser: true },
   ui: { mode: 'advanced', hidePanels: [] },
   shortcuts: [],
+  organize: { auto: [] }, // tidy-up kinds allowed to apply on their own (only tag, related, project, file are accepted)
   files: { remoteEdit: false }, // phones/other devices may read project files; editing them needs this turned on
   ux: { measure: false, onboarded: false },
   preferences: { forgotten: [] },

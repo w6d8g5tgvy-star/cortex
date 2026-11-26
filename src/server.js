@@ -406,6 +406,9 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
     return { message: msg, resumed: !!pl.resume, route };
   }
 
+  // automatic tidy-up, only for the kinds the user allowed (Settings or the Tidy up panel); every 6 hours
+  setInterval(() => { try { const kinds = (conf().organize || {}).auto || []; if (kinds.length) { const done = require('./organize').autoRun(store, kinds); if (done.length) broadcast({ type: 'change' }); } } catch (e) { console.warn('auto tidy-up:', e.message); } }, 6 * 3600e3).unref();
+
   async function runner_bin_set(fn) { await runner.available(); fn.bin = runner.bin('claude'); }
   function notifyJob(j) {
     try { const ok = j.status === 'done'; require('./notify').add(vault, { kind: ok ? 'done' : 'failed', title: `${ok ? 'Finished' : j.status === 'stopped' ? 'Stopped' : 'Failed'} on ${j.deviceName}: ${String(j.prompt || j.task || '').slice(0, 80)}`, body: String(j.result || j.step || '').slice(0, 240), ref: j.id, project: j.project }); broadcast({ type: 'notify' }); } catch { /* optional */ }
@@ -907,6 +910,17 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
         if (b.action === 'destroy') return send(res, 200, sbx.destroy(b.id));
       } catch (e) { return send(res, 400, { error: e.message }); }
       return send(res, 400, { error: 'unknown action' });
+    }
+    // ---- automatic project organization (#33) ----
+    if (p === '/api/organize' && m === 'GET') { const org = require('./organize'); return send(res, 200, { suggestions: org.suggest(store), kinds: org.KINDS, safeAuto: org.SAFE_AUTO, auto: (conf().organize || {}).auto || [], history: org.history(vault) }); }
+    if (p === '/api/organize' && m === 'POST') {
+      const org = require('./organize'); const b = await json();
+      try {
+        if (b.action === 'apply') { const r = org.apply(store, b.id, { by: agent }); broadcast({ type: 'change' }); return send(res, 200, r); }
+        if (b.action === 'dismiss') return send(res, 200, org.dismiss(vault, b.id));
+        if (b.action === 'auto') { if (!local) return send(res, 403, { error: 'This can only be changed on your main computer' }); const auto = (b.auto || []).filter((k) => org.SAFE_AUTO.includes(k)); settingsMod.save(vault, { ...conf(), organize: { auto } }); store.log({ agent, action: 'settings.organize', summary: auto.length ? `Automatic tidy-up turned on for: ${auto.join(', ')}` : 'Automatic tidy-up turned off' }); return send(res, 200, { auto }); }
+        return send(res, 400, { error: 'Unknown action' });
+      } catch (e) { return send(res, 400, { error: e.message }); }
     }
     if (p === '/api/files/settings' && m === 'POST') { if (!local) return send(res, 403, { error: 'This can only be changed on your main computer' }); const b = await json(); const next = { ...(conf().files || {}), remoteEdit: !!b.remoteEdit }; settingsMod.save(vault, { ...conf(), files: next }); store.log({ agent, action: 'settings.files', summary: `Editing project files from other devices turned ${next.remoteEdit ? 'on' : 'off'}` }); return send(res, 200, next); }
     // ---- built-in file editor (#35): a project's own folder, which must be an allowed folder ----
