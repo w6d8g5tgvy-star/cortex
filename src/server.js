@@ -375,6 +375,37 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
   setInterval(() => { for (const wf of wfMod.due(vault, wfLast)) { wfLast[wf.id] = Date.now(); const tr = wf.nodes.find((n) => n.type === 'trigger').config || {}; wfStart(wf, { trigger: { project: tr.project || undefined }, by: 'schedule' }); } }, 60000).unref();
   for (const wf of wfMod.list(vault)) wfLast[wf.id] = Date.now(); // schedules count from start-up, never all at once
 
+  // ---------------- conversations (#21) ----------------
+  const chatMod = require('./conversations');
+  async function chatSend(id, { text, tool, model, attachments, by }) {
+    const s = conf().agents;
+    if (!s.enabled) throw new Error('Starting agents is turned off (Settings → Agent control).');
+    const avail = await runner.available();
+    const c0 = chatMod.get(vault, id); if (!c0) throw new Error('Conversation not found');
+    // automatic routing unless the user picked a model
+    let route = null;
+    if (!model || /^auto$/i.test(model)) { route = require('./intel').router.route(store, { prompt: text, project: c0.project || undefined, tool: tool && tool !== 'auto' ? tool : undefined }); tool = route.tool; model = route.model; }
+    tool = tool === 'codex' ? 'codex' : 'claude';
+    if (!avail[tool] || !avail[tool].installed) throw new Error(`${tool === 'codex' ? 'Codex' : 'Claude Code'} isn't installed on this computer. ${(avail[tool] && avail[tool].help) || ''}`.trim());
+    const proj = c0.project ? store.get('projects/' + c0.project) : null;
+    const cwd = (proj && proj.meta.folder && agents.folderAllowed(proj.meta.folder, s.folders) && proj.meta.folder) || s.folders[0];
+    if (!cwd || !agents.folderAllowed(cwd, s.folders)) throw new Error('Add an allowed folder first (Settings → Agent control).');
+    const pl = chatMod.plan(vault, c0, { text, tool, model, attachments });
+    chatMod.addUser(vault, id, { text, attachments, by });
+    const r = runner.launch({ tool, prompt: pl.prompt, cwd, permission: 'default', maxMinutes: 20, project: c0.project || undefined, model: model || undefined, resume: pl.resume || undefined, from: 'chat' });
+    const msg = chatMod.addPending(vault, id, { tool, model, runId: r.id, route: route ? { model: route.model, tool: route.tool, reasons: route.reasons } : null });
+    broadcast({ type: 'chat', id }); broadcast({ type: 'live' });
+    const iv = setInterval(() => {
+      const ss = sessions.get(vault, r.id) || {};
+      if (runner.running().includes(r.id) || !['done', 'error'].includes(ss.status)) return;
+      clearInterval(iv);
+      chatMod.complete(vault, id, msg.id, { status: ss.status, text: ss.result || ss.step || '', model: ss.model, session: ss.claude_session, cost: ss.cost_usd });
+      broadcast({ type: 'chat', id });
+    }, 1000);
+    iv.unref();
+    return { message: msg, resumed: !!pl.resume, route };
+  }
+
   async function runner_bin_set(fn) { await runner.available(); fn.bin = runner.bin('claude'); }
   function notifyJob(j) {
     try { const ok = j.status === 'done'; require('./notify').add(vault, { kind: ok ? 'done' : 'failed', title: `${ok ? 'Finished' : j.status === 'stopped' ? 'Stopped' : 'Failed'} on ${j.deviceName}: ${String(j.prompt || j.task || '').slice(0, 80)}`, body: String(j.result || j.step || '').slice(0, 240), ref: j.id, project: j.project }); broadcast({ type: 'notify' }); } catch { /* optional */ }
@@ -874,6 +905,35 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
         if (b.action === 'destroy') return send(res, 200, sbx.destroy(b.id));
       } catch (e) { return send(res, 400, { error: e.message }); }
       return send(res, 400, { error: 'unknown action' });
+    }
+    if (p === '/api/chat' && m === 'GET') {
+      const id = u.searchParams.get('id');
+      if (id) { const c = chatMod.get(vault, id); return c ? send(res, 200, { conversation: c }) : send(res, 404, { error: 'Conversation not found' }); }
+      const avail = await runner.available();
+      return send(res, 200, { conversations: chatMod.list(vault, { project: u.searchParams.get('project') || undefined }), tools: Object.fromEntries(Object.entries(avail).map(([k, a]) => [k, { label: a.label, installed: a.installed, help: a.help }])), models: agents.MODELS || null, agentsEnabled: !!conf().agents.enabled, notSupported: 'ChatGPT, Gemini and other chat apps can\'t be driven from here (no supported way to do it). Connect them to Cortex as agents instead: they share the same memories and tasks.' });
+    }
+    if (p === '/api/chat' && m === 'POST') {
+      const b = await json();
+      try {
+        if (b.action === 'create') { const c = chatMod.create(vault, { title: b.title, project: b.project || null }); return send(res, 201, { conversation: c }); }
+        if (b.action === 'rename') return send(res, 200, { conversation: chatMod.rename(vault, b.id, b.title) });
+        if (b.action === 'delete') return send(res, chatMod.remove(vault, b.id) ? 200 : 404, { ok: true });
+        if (b.action === 'send') { const r = await chatSend(b.id, { text: b.text, tool: b.tool, model: b.model, attachments: b.attachments || [], by: agent }); return send(res, 202, r); }
+        if (b.action === 'remember') {
+          const c = chatMod.get(vault, b.id); const mm = c && c.messages.find((x) => x.id === b.message); if (!mm) return send(res, 404, { error: 'Message not found' });
+          const note = store.create('note', { title: String(b.title || `From chat: ${c.title}`).slice(0, 150), body: mm.text, ...(c.project ? { project: c.project } : {}), tags: ['chat'] });
+          store.log({ agent, action: 'memory.create', summary: `Saved a chat answer as memory "${note.title}"`, ref: note.id, project: c.project || undefined });
+          return send(res, 201, { note: store.toJSON(note) });
+        }
+        if (b.action === 'handoff') {
+          const c = chatMod.get(vault, b.id); if (!c) return send(res, 404, { error: 'Conversation not found' });
+          const cmd = agents.createCommand(vault, { text: chatMod.handoffText(c, b.note), target: b.to || 'any', project: c.project || undefined, from: 'chat', kind: 'handoff' });
+          store.log({ agent, action: 'agent.handoff', summary: `Handed conversation "${c.title}" to ${cmd.target}`, project: c.project || undefined, ref: cmd.id });
+          broadcast({ type: 'commands' });
+          return send(res, 201, { command: cmd });
+        }
+        return send(res, 400, { error: 'Unknown action' });
+      } catch (e) { return send(res, 400, { error: e.message }); }
     }
     if (p === '/api/workflows' && m === 'GET') return send(res, 200, { workflows: wfMod.list(vault), templates: wfMod.TEMPLATES, types: wfMod.NODE_TYPES, triggers: wfMod.TRIGGERS, tools: wfMod.TOOLS, ops: wfMod.OPS, limits: wfMod.DEFAULT_LIMITS, runs: wfMod.runs(vault, { limit: 30 }) });
     if (p === '/api/workflows' && m === 'POST') {
