@@ -63,6 +63,18 @@ function redeem(vault, code, { name, platform, version, ip } = {}) {
   return { device: publicView(dev), token };
 }
 
+/** Is this a valid, unused code? (Doesn't use it up. Wrong guesses count toward the same limit as pairing.) */
+function peek(vault, code, { ip } = {}) {
+  const d = load(vault); const now = Date.now();
+  d.failures = d.failures.filter((f) => now - f.t < CODE_TTL_MS);
+  if (d.failures.filter((f) => f.ip === (ip || '?')).length >= 10) throw new Error('Too many wrong codes. Wait 10 minutes and make a new code.');
+  const norm = String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const want = norm.length === 8 ? sha(norm.slice(0, 4) + '-' + norm.slice(4)) : '';
+  const c = d.codes.find((x) => x.hash === want);
+  if (!c || c.used || c.expires <= now) { d.failures.push({ ip: ip || '?', t: now }); save(vault, d); throw new Error(c ? 'That code has expired or was already used. Make a new one in Cortex (Settings → Devices).' : 'Wrong or expired code. Make a new one in Cortex (Settings → Devices).'); }
+  return { kind: c.kind, code: norm.slice(0, 4) + '-' + norm.slice(4), expiresAt: new Date(c.expires).toISOString() };
+}
+
 const seenCache = new Map(); // throttle lastSeen writes
 /** The device a key belongs to (or null). Updates "last seen" at most every 30 s. */
 function authenticate(vault, token, info = {}) {
@@ -86,4 +98,4 @@ function list(vault) { return load(vault).devices.filter((x) => !x.revoked).map(
 function rename(vault, id, name) { const d = load(vault); const x = d.devices.find((y) => y.id === id && !y.revoked); if (!x) throw new Error('Device not found'); x.name = cleanName(name, x.kind); save(vault, d); return publicView(x); }
 function revoke(vault, id) { const d = load(vault); const x = d.devices.find((y) => y.id === id && !y.revoked); if (!x) throw new Error('Device not found'); x.revoked = true; x.revokedAt = new Date().toISOString(); save(vault, d); return publicView(x); }
 
-module.exports = { createCode, redeem, authenticate, list, rename, revoke, ONLINE_MS, CODE_TTL_MS };
+module.exports = { createCode, peek, redeem, authenticate, list, rename, revoke, ONLINE_MS, CODE_TTL_MS };

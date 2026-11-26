@@ -14,6 +14,18 @@ Cortex runs on your own computer. It gives you a dashboard in your browser with 
 
 ---
 
+## Easiest: one-file installer (no terminal)
+
+Download the installer for your computer from the [`installers`](installers) folder and double-click it:
+
+- **Windows:** `Install Cortex.cmd`. If Windows says it "protected your PC", click **More info → Run anyway**.
+- **Mac:** `Install Cortex (Mac).zip`. Open the zip, then **right-click `Install Cortex.command` → Open** the first time.
+- **Linux:** `install-cortex.sh` (run `bash install-cortex.sh`).
+
+It installs Node.js if needed, downloads Cortex into `~/Cortex-app`, connects your AI apps, makes Cortex start when you sign in, and opens the dashboard.
+
+**Adding a second computer** (to run agents there, or to keep a standby copy that opens when your main computer is off): in your main Cortex open **Settings → Devices → Add a computer**. Open the link it shows on the other computer, download the installer and double-click it. The installer only holds a one-time code that expires after 10 minutes.
+
 ## Quick setup (recommended)
 
 1. Install **Node.js 18+** from <https://nodejs.org>.

@@ -308,7 +308,46 @@ function startServer({ store, port, host, token: cliToken }) {
     store.log({ agent: 'you', action: 'device.paired', summary: `Paired ${r.device.kind === 'computer' ? 'computer' : 'phone'} "${r.device.name}"` });
     broadcast({ type: 'devices' });
     if (r.device.kind === 'phone') return send(res, 200, { device: r.device }, { 'Set-Cookie': `cortex_token=${encodeURIComponent(r.token)}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict` });
+    // installers ask for the runner's config file directly (so they need no JSON tools)
+    if (b.format === 'runner-config' && /^https?:\/\/[A-Za-z0-9.-]+(:\d+)?$/.test(String(b.hub || ''))) return send(res, 200, { hub: String(b.hub), token: r.token, device: r.device, folders: [], projects: {} });
     return send(res, 200, { device: r.device, token: r.token });
+  }
+  // ---- one-file installers (#20): /install (new main computer) and /i/<code> (connect a second computer) ----
+  function publicHub(req) {
+    const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+    const proto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() || (req.socket.encrypted || /\.ts\.net$|\.trycloudflare\.com$/.test(host.replace(/:\d+$/, '')) ? 'https' : 'http');
+    return `${proto}://${host}`;
+  }
+  function sendInstallPage(res, { code, kind, hub, expiresAt }) {
+    const q = code ? `/i/${encodeURIComponent(code)}` : '/install';
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Install Cortex</title>
+<body style="font:16px system-ui;margin:0;min-height:100vh;display:grid;place-items:center;background:radial-gradient(circle at 30% 20%,#1b1440,#05060d 60%);color:#e7e9f2">
+<div style="width:min(460px,92vw);padding:28px;border-radius:18px;background:rgba(255,255,255,.04);border:1px solid rgba(124,160,255,.25)">
+<h2 style="margin:0 0 6px">${code ? 'Connect this computer to your Cortex' : 'Install Cortex on this computer'}</h2>
+<p style="margin:0 0 16px;color:#9aa3c7;font-size:14px">${code ? `Download the installer below and double-click it. It connects this computer to your main Cortex (${hub.replace(/[<>"]/g, '')}), installs Node.js if needed, and starts by itself from now on. The code inside works once${expiresAt ? ` until ${new Date(expiresAt).toLocaleTimeString()}` : ''}.` : 'Download the installer for this computer and double-click it. It installs Node.js if needed, downloads Cortex and opens it.'}</p>
+${code ? '<label style="display:block;margin:0 0 14px;font-size:14px"><input type="checkbox" id="sb" checked> Also keep a standby copy: open Cortex here when the main computer is off</label>' : ''}
+<div style="display:flex;flex-direction:column;gap:8px">
+<a id="w" style="padding:12px;border-radius:12px;background:#7c5cff;color:#fff;text-decoration:none;text-align:center;font-weight:600" href="${q}/windows">Download for Windows</a>
+<a id="m" style="padding:12px;border-radius:12px;background:#2b2f55;color:#fff;text-decoration:none;text-align:center;font-weight:600" href="${q}/mac">Download for Mac</a>
+<a id="l" style="padding:12px;border-radius:12px;background:#2b2f55;color:#fff;text-decoration:none;text-align:center;font-weight:600" href="${q}/linux">Download for Linux</a></div>
+<p style="color:#9aa3c7;font-size:13px;margin:16px 0 0">Windows may say it "protected your PC": click <b>More info → Run anyway</b>. Mac: open the downloaded zip, then <b>right-click the installer → Open</b> the first time. Nothing else to type.</p></div>
+<script>const ua=navigator.userAgent;const first=/Mac/.test(ua)?'m':/Win/.test(ua)?'w':/Linux/.test(ua)?'l':'';if(first){const a=document.getElementById(first);a.style.background='#7c5cff';a.parentNode.prepend(a);for(const x of ['w','m','l'])if(x!==first)document.getElementById(x).style.background='#2b2f55';}
+const sb=document.getElementById('sb');if(sb){const set=()=>{for(const x of ['w','m','l']){const a=document.getElementById(x);a.href=a.href.split('?')[0]+(sb.checked?'?standby=1':'');}};sb.onchange=set;set();}</script>`);
+  }
+  function sendInstaller(res, os_, o) {
+    let f; try { f = require('./installers').build(os_, o); } catch (e) { return send(res, 400, { error: e.message }); }
+    res.writeHead(200, { 'Content-Type': f.type, 'Content-Disposition': `attachment; filename="${f.name}"`, 'Cache-Control': 'no-store', 'Content-Length': f.body.length });
+    res.end(f.body);
+  }
+  function handleInstall(req, res, u) {
+    const parts = u.pathname.split('/').filter(Boolean); // ['install', os?] or ['i', code, os?]
+    if (parts[0] === 'install') return parts[1] ? sendInstaller(res, parts[1], {}) : sendInstallPage(res, {});
+    let info; try { info = require('./devices').peek(vault, decodeURIComponent(parts[1] || ''), { ip: req.socket.remoteAddress }); } catch (e) { res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><body style="font:16px system-ui;padding:40px;background:#05060d;color:#e7e9f2"><h2>Can't use this link</h2><p>${String(e.message).replace(/[<>]/g, '')}</p>`); }
+    if (info.kind !== 'computer') return send(res, 400, { error: 'This code is for a phone. Make a "computer" code in Settings → Devices.' });
+    const hub = publicHub(req);
+    if (!parts[2]) return sendInstallPage(res, { code: info.code, kind: info.kind, hub, expiresAt: info.expiresAt });
+    return sendInstaller(res, parts[2], { hub, code: info.code, standby: u.searchParams.get('standby') === '1' });
   }
   function sendPairPage(res, u) {
     const code = String(u.searchParams.get('code') || '').replace(/[^A-Za-z0-9-]/g, '').slice(0, 12);
@@ -1257,7 +1296,7 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
       try {
         const c = require('./devices').createCode(vault, { kind: b.kind, name: b.name });
         const host = req.headers.host;
-        return send(res, 201, { ...c, phoneUrl: `/pair?code=${encodeURIComponent(c.code)}`, runnerCommand: `node bin/cortex.js runner --hub <this Cortex's address> --code ${c.code}`, host });
+        return send(res, 201, { ...c, phoneUrl: `/pair?code=${encodeURIComponent(c.code)}`, installUrl: `/i/${encodeURIComponent(c.code)}`, runnerCommand: `node bin/cortex.js runner --hub <this Cortex's address> --code ${c.code}`, host });
       } catch (e) { return send(res, 400, { error: e.message }); }
     }
     if (p === '/api/devices/rename' && m === 'POST') { if (!localOnly()) return; const b = await json(); try { return send(res, 200, require('./devices').rename(vault, b.id, b.name)); } catch (e) { return send(res, 404, { error: e.message }); } }
@@ -1524,6 +1563,7 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
       }
       if (u.pathname === '/api/pair' && req.method === 'POST') return await handlePair(req, res, u);
       if (u.pathname === '/pair' && req.method === 'GET') return sendPairPage(res, u);
+      if ((u.pathname === '/install' || u.pathname.startsWith('/install/') || u.pathname.startsWith('/i/')) && req.method === 'GET') return handleInstall(req, res, u);
       if (u.pathname.startsWith('/api/runner/')) {
         const dev = deviceFor(req, u);
         if (!dev || dev.kind !== 'computer') return send(res, 401, { error: 'This computer is not paired with Cortex (or was removed). Pair it again with a new code.' });
