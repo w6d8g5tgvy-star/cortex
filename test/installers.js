@@ -45,6 +45,20 @@ const lanIp = Object.values(os.networkInterfaces()).flat().find((a) => a && a.fa
     assert.equal(r.status, 0, out); assert.match(out, /Cortex setup/); assert.match(out, /Cortex settings/); assert.ok(!/is not a function/.test(out));
     ok('`cortex setup` runs (it was broken when Fetcher 2 replaced src/setup.js; restored as src/appsetup.js)'); }
 
+  // ---------- cloud server script + `cortex pair` ----------
+  { const srvScript = path.join(__dirname, '..', 'installers', 'install-cortex-server.sh');
+    assert.equal(spawnSync('bash', ['-n', srvScript]).status, 0, 'server installer is valid bash');
+    const txt = fs.readFileSync(srvScript, 'utf8');
+    assert.ok(/systemctl enable --now cortex/.test(txt) && /tailscale funnel --bg/.test(txt) && /ssh-keygen/.test(txt) && /Allow write access/.test(txt));
+    assert.ok(!/ghp_|password=/.test(txt), 'no credentials in the script');
+    const pv = path.join(T, 'pairv');
+    const r = spawnSync(process.execPath, [path.join(__dirname, '..', 'bin', 'cortex.js'), 'pair', '--vault', pv, '--url', 'https://cortex-cloud.example.ts.net']);
+    const m = r.stdout.toString().match(/Pairing code for a phone: ([A-Z0-9]{4}-[A-Z0-9]{4})/); assert.ok(m, r.stdout.toString() + r.stderr.toString());
+    assert.ok(r.stdout.toString().includes(`https://cortex-cloud.example.ts.net/pair?code=${m[1]}`));
+    assert.equal(require('../src/devices').redeem(pv, m[1], { name: 'Phone' }).device.kind, 'phone', 'the printed code pairs a phone');
+    const rc = spawnSync(process.execPath, [path.join(__dirname, '..', 'bin', 'cortex.js'), 'pair', '--computer', '--vault', pv]); assert.match(rc.stdout.toString(), /for a computer/);
+    ok('cloud server: one-line server installer (service, deploy key, Tailscale Funnel) and `cortex pair` for screenless servers'); }
+
   // ---------- server ----------
   const v = path.join(T, 'v'); new Store(v);
   fs.mkdirSync(path.join(v, '.cortex'), { recursive: true }); fs.writeFileSync(path.join(v, '.cortex', 'settings.json'), JSON.stringify({ remote: { enabled: true, token: 'tok-abcdefghijk' } }));

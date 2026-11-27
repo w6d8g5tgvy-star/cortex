@@ -26,6 +26,8 @@ It installs Node.js if needed, downloads Cortex into `~/Cortex-app`, connects yo
 
 **Adding a second computer** (to run agents there, or to keep a standby copy that opens when your main computer is off): in your main Cortex open **Settings → Devices → Add a computer**. Open the link it shows on the other computer, download the installer and double-click it. The installer only holds a one-time code that expires after 10 minutes.
 
+**Open Cortex even when your computers are off:** run it on a small always-on cloud server (free options exist). See [docs/cloud-server.md](docs/cloud-server.md): one line to paste on the server.
+
 ## Quick setup (recommended)
 
 1. Install **Node.js 18+** from <https://nodejs.org>.

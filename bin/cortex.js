@@ -45,6 +45,7 @@ Usage:
   cortex runner           Let this computer run agent jobs for your main Cortex
                           (first time: --hub <main Cortex address> --code <code> --folder <dir>)
                           --standby: also keep a copy of the main Cortex and serve it while the main computer is off
+  cortex pair             Make a one-time pairing code (--computer for a computer, --url <address> for a link)
   cortex help             Show this help
 
 Options:
@@ -158,6 +159,16 @@ async function main() {
     return;
   }
 
+  if (cmd === 'pair') { // make a pairing code from the command line (for servers with no screen)
+    const kind = has('computer') ? 'computer' : 'phone';
+    const c = require('../src/devices').createCode(vault, { kind, name: flag('name') });
+    const base = (flag('url') || '').replace(/\/+$/, '');
+    console.log(`\n  Pairing code for a ${kind}: ${c.code}  (works once, for ${c.minutes} minutes)`);
+    if (base) console.log(kind === 'phone' ? `  On your phone open: ${base}/pair?code=${encodeURIComponent(c.code)}` : `  On the other computer open: ${base}/i/${encodeURIComponent(c.code)}`);
+    else console.log(`  On your ${kind}, open this Cortex's address and enter the code${kind === 'phone' ? ' at /pair' : ' at /i/<code>'}.`);
+    console.log('');
+    process.exit(0);
+  }
   if (cmd === 'setup') {
     const results = require('../src/appsetup').run(vault, { phone: !has('no-phone'), screen: !has('no-screen'), autostart: !has('no-autostart') });
     const icon = { ok: '✓', skip: '–', fail: '✗' };
