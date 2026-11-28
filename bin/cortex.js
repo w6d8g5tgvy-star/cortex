@@ -21,8 +21,9 @@ const flag = (name, def) => {
 const has = (name) => args.includes(`--${name}`);
 const expand = (p) => (p.startsWith('~') ? path.join(os.homedir(), p.slice(1)) : p);
 
-const vault = path.resolve(expand(flag('vault', process.env.CORTEX_VAULT || path.join(os.homedir(), 'Cortex'))));
-const port = Number(flag('port', process.env.CORTEX_PORT || 7777));
+const HOSTED = process.env.CORTEX_STORE === 'cosmos'; // running on Azure App Service with Cosmos DB
+const vault = path.resolve(expand(flag('vault', process.env.CORTEX_VAULT || (HOSTED ? require('../src/azure/hosted').defaultVault() : path.join(os.homedir(), 'Cortex')))));
+const port = Number(flag('port', process.env.CORTEX_PORT || (HOSTED && process.env.PORT) || 7777));
 const token = flag('token', process.env.CORTEX_TOKEN || '');
 
 function openBrowser(url) {
@@ -45,6 +46,7 @@ Usage:
   cortex runner           Let this computer run agent jobs for your main Cortex
                           (first time: --hub <main Cortex address> --code <code> --folder <dir>)
                           --standby: also keep a copy of the main Cortex and serve it while the main computer is off
+                          --sync [folder]: keep a full two-way synced copy of a main Cortex in the cloud (default ~/Cortex)
   cortex pair             Make a one-time pairing code (--computer for a computer, --url <address> for a link)
   cortex help             Show this help
 
@@ -85,12 +87,23 @@ function supervise() {
 async function serve() {
   const { Store } = require('../src/store');
   const settings = require('../src/settings');
+  let hosted = null;
+  if (HOSTED) { // Azure: restore everything from Cosmos DB before anything else reads the vault
+    const az = require('../src/azure/hosted');
+    try { hosted = await az.prepare(vault); } catch (e) { console.error(`Couldn't restore from Cosmos DB: ${e.message}`); process.exit(1); }
+  }
   const s = settings.load(vault);
   const host = flag('host', process.env.CORTEX_HOST || (s.remote.enabled ? '0.0.0.0' : '127.0.0.1'));
   const store = new Store(vault);
   const { startServer, lanAddresses } = require('../src/server');
   try {
     await startServer({ store, port, host, token });
+    if (hosted) {
+      const keeper = require('../src/azure/hosted').startPersistence({ cosmos: hosted.cosmos, vault, known: hosted.known, store });
+      global.cortexPersistence = keeper;
+      for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, async () => { try { await keeper.flush(); } catch (e) { console.error('Final save to Cosmos DB failed:', e.message); } process.exit(0); });
+      console.log('  Cortex is running on Azure: changes are saved to Cosmos DB.');
+    }
   } catch (e) {
     if (e.code === 'EADDRINUSE') {
       console.error(`Port ${port} is already in use. Cortex may already be running: http://127.0.0.1:${port}\nUse --port to pick another port.`);
@@ -119,7 +132,7 @@ async function main() {
 
   if (cmd === 'runner') {
     const folders = args.map((x, i) => (x === '--folder' ? args[i + 1] : null)).filter(Boolean);
-    try { await require('../src/runner-client').start({ hub: flag('hub'), code: flag('code'), name: flag('name'), folders, once: has('once'), standby: has('standby'), port: Number(flag('port')) || 7777, takeoverMinutes: flag('takeover-minutes') !== undefined ? Number(flag('takeover-minutes')) : 5 }); }
+    try { await require('../src/runner-client').start({ hub: flag('hub'), code: flag('code'), name: flag('name'), folders, once: has('once'), standby: has('standby'), sync: has('sync') ? (flag('sync') && !String(flag('sync')).startsWith('--') ? flag('sync') : true) : false, port: Number(flag('port')) || 7777, takeoverMinutes: flag('takeover-minutes') !== undefined ? Number(flag('takeover-minutes')) : 5 }); }
     catch (e) { console.error('✗ ' + e.message); process.exit(1); }
     return;
   }

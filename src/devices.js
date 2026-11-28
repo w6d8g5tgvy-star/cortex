@@ -23,7 +23,7 @@ function save(vault, d) {
   fs.renameSync(tmp, file(vault));
 }
 const cleanName = (s, kind) => String(s || '').replace(/[^\p{L}\p{N} '’._-]/gu, '').trim().slice(0, 40) || (kind === 'computer' ? 'Computer' : 'Phone');
-const publicView = (x) => ({ id: x.id, name: x.name, kind: x.kind, created: x.created, lastSeen: x.lastSeen, online: !!x.lastSeen && Date.now() - Date.parse(x.lastSeen) < ONLINE_MS, platform: x.platform, version: x.version, revoked: !!x.revoked });
+const publicView = (x) => ({ id: x.id, name: x.name, kind: x.kind, owner: !!x.owner, created: x.created, lastSeen: x.lastSeen, online: !!x.lastSeen && Date.now() - Date.parse(x.lastSeen) < ONLINE_MS, platform: x.platform, version: x.version, revoked: !!x.revoked });
 
 /** Start pairing a new device. Returns the code to show (only shown once). */
 function createCode(vault, { kind = 'phone', name } = {}) {
@@ -63,6 +63,25 @@ function redeem(vault, code, { name, platform, version, ip } = {}) {
   return { device: publicView(dev), token };
 }
 
+/**
+ * Hosted Cortex (Azure) has no "main computer" to make pairing codes on. The owner setup code (an App Setting from Key
+ * Vault) pairs the FIRST owner device; it stops working once an owner exists. Owners can do main-computer things.
+ */
+function redeemOwner(vault, code, setupCode, { name, platform, ip } = {}) {
+  const d = load(vault); const now = Date.now();
+  d.failures = d.failures.filter((f) => now - f.t < CODE_TTL_MS);
+  if (d.failures.filter((f) => f.ip === (ip || '?')).length >= 10) throw new Error('Too many wrong codes. Wait 10 minutes.');
+  const a = Buffer.from(String(code || '').trim()); const b = Buffer.from(String(setupCode || ''));
+  const match = setupCode && String(setupCode).length >= 12 && a.length === b.length && crypto.timingSafeEqual(a, b);
+  if (!match) { d.failures.push({ ip: ip || '?', t: now }); save(vault, d); return null; }
+  if (d.devices.some((x) => x.owner && !x.revoked)) throw new Error('An owner is already paired. Make a pairing code from the owner\'s phone (Settings → Devices) instead.');
+  const token = crypto.randomBytes(32).toString('base64url');
+  const dev = { id: 'dev-' + crypto.randomBytes(5).toString('hex'), name: cleanName(name, 'phone'), kind: 'phone', owner: true, tokenHash: sha(token), created: new Date().toISOString(), lastSeen: new Date().toISOString(), platform: String(platform || '').slice(0, 40) || undefined };
+  d.devices.push(dev); save(vault, d);
+  return { device: publicView(dev), token };
+}
+function setOwner(vault, id, owner) { const d = load(vault); const x = d.devices.find((y) => y.id === id && !y.revoked); if (!x) throw new Error('Device not found'); if (!owner && d.devices.filter((y) => y.owner && !y.revoked).length <= 1 && x.owner) throw new Error('Keep at least one owner'); x.owner = !!owner; save(vault, d); return publicView(x); }
+
 /** Is this a valid, unused code? (Doesn't use it up. Wrong guesses count toward the same limit as pairing.) */
 function peek(vault, code, { ip } = {}) {
   const d = load(vault); const now = Date.now();
@@ -98,4 +117,4 @@ function list(vault) { return load(vault).devices.filter((x) => !x.revoked).map(
 function rename(vault, id, name) { const d = load(vault); const x = d.devices.find((y) => y.id === id && !y.revoked); if (!x) throw new Error('Device not found'); x.name = cleanName(name, x.kind); save(vault, d); return publicView(x); }
 function revoke(vault, id) { const d = load(vault); const x = d.devices.find((y) => y.id === id && !y.revoked); if (!x) throw new Error('Device not found'); x.revoked = true; x.revokedAt = new Date().toISOString(); save(vault, d); return publicView(x); }
 
-module.exports = { createCode, peek, redeem, authenticate, list, rename, revoke, ONLINE_MS, CODE_TTL_MS };
+module.exports = { createCode, peek, redeem, redeemOwner, setOwner, authenticate, list, rename, revoke, ONLINE_MS, CODE_TTL_MS };

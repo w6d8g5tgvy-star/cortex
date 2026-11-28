@@ -62,6 +62,8 @@ function lanAddresses(port) {
   return out.sort((a, b) => (a.kind === 'tailscale') - (b.kind === 'tailscale'));
 }
 
+const HOSTED = process.env.CORTEX_STORE === 'cosmos';
+
 function startServer({ store, port, host, token: cliToken }) {
   const vault = store.vault;
   const mcp = createMcp(store);
@@ -304,7 +306,10 @@ function startServer({ store, port, host, token: cliToken }) {
   async function handlePair(req, res, u) {
     const b = JSON.parse((await readBody(req)) || '{}');
     let r;
-    try { r = require('./devices').redeem(vault, b.code, { name: b.name, platform: b.platform, version: b.version, ip: req.socket.remoteAddress }); } catch (e) { return send(res, 400, { error: e.message }); }
+    try {
+      r = HOSTED && process.env.CORTEX_OWNER_SETUP_CODE ? require('./devices').redeemOwner(vault, b.code, process.env.CORTEX_OWNER_SETUP_CODE, { name: b.name, platform: b.platform, ip: req.socket.remoteAddress }) : null;
+      if (!r) r = require('./devices').redeem(vault, b.code, { name: b.name, platform: b.platform, version: b.version, ip: req.socket.remoteAddress });
+    } catch (e) { return send(res, 400, { error: e.message }); }
     store.log({ agent: 'you', action: 'device.paired', summary: `Paired ${r.device.kind === 'computer' ? 'computer' : 'phone'} "${r.device.name}"` });
     broadcast({ type: 'devices' });
     if (r.device.kind === 'phone') return send(res, 200, { device: r.device }, { 'Set-Cookie': `cortex_token=${encodeURIComponent(r.token)}; Path=/; Max-Age=31536000; HttpOnly; SameSite=Strict` });
@@ -499,10 +504,12 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
     }
     // ---- standby host: a paired computer keeps a copy of this vault and hands changes back ----
     if (u.pathname === '/api/runner/ping' && req.method === 'POST') return send(res, 200, { ok: true, version: require('../package.json').version });
-    if (u.pathname === '/api/runner/vault-changes' && req.method === 'POST') return send(res, 200, require('./standby').changes(vault, b.known || {}));
+    if (u.pathname === '/api/runner/vault-changes' && req.method === 'POST') return send(res, 200, require('./standby').changes(vault, b.known || {}, { withIndex: !!b.withIndex }));
     if (u.pathname === '/api/runner/vault-import' && req.method === 'POST') {
       const r = require('./standby').importChanges(vault, b.files || [], { baseline: b.baseline || {}, device: dev.name });
+      if (Array.isArray(b.deleted) && b.deleted.length) { const d = require('./standby').importDeletes(vault, b.deleted, { baseline: b.baseline || {} }); r.removed = d.removed; r.keptDeleted = d.kept; }
       store.scan(false);
+      if (b.mode === 'sync') { store.scan(false); if (r.written.length || r.conflicts.length || (r.removed || []).length) { store.log({ agent: 'cortex', action: 'sync.in', summary: `${dev.name} synced ${r.written.length} change(s)${(r.removed || []).length ? `, ${r.removed.length} deletion(s)` : ''}${r.conflicts.length ? `; kept both versions of ${r.conflicts.length} file(s)` : ''}`, device: dev.name }); broadcast({ type: 'change' }); } return send(res, 200, r); }
       store.log({ agent: 'cortex', action: 'standby.handback', summary: `${dev.name} handed back ${r.written.length} changed file(s) made while this computer was off${r.conflicts.length ? `; ${r.conflicts.length} conflict(s) kept side by side` : ''}`, device: dev.name });
       if (r.written.length || r.conflicts.length) { try { require('./notify').add(vault, { kind: 'done', title: `${dev.name} handed back the work done while this computer was off`, body: `${r.written.length} files updated${r.conflicts.length ? `, ${r.conflicts.length} edited in both places (both versions kept: ${r.conflicts.map((c) => c.savedAs).slice(0, 3).join(', ')})` : ''}`, key: 'standby|' + dev.id }); } catch { /* optional */ } }
       broadcast({ type: 'change' });
@@ -556,7 +563,8 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
   async function handleApi(req, res, u) {
     const p = u.pathname;
     const m = req.method;
-    const local = isLocal(req);
+    // On Azure there's no "this computer": owner devices may do what the main computer can
+    const local = isLocal(req) || (HOSTED && (() => { const d = deviceFor(req, u); return !!(d && d.owner); })());
     const json = async () => { const t = await readBody(req); return t ? JSON.parse(t) : {}; };
     const agent = local ? 'you' : 'you (phone)';
     const localOnly = () => { if (!local) { send(res, 403, { error: 'This setting can only be changed on the computer running Cortex.' }); return false; } return true; };
@@ -1320,6 +1328,7 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
 
     // ---- devices ----
     if (p === '/api/devices' && m === 'GET') return send(res, 200, { devices: require('./devices').list(vault) });
+    if (p === '/api/devices/owner' && m === 'POST') { if (!localOnly()) return; const b = await json(); try { const d = require('./devices').setOwner(vault, b.id, !!b.owner); store.log({ agent, action: 'device.owner', summary: `${d.name} is ${d.owner ? 'now' : 'no longer'} an owner` }); return send(res, 200, d); } catch (e) { return send(res, 400, { error: e.message }); } }
     if (p === '/api/devices/code' && m === 'POST') {
       if (!localOnly()) return;
       const b = await json();
@@ -1592,6 +1601,7 @@ const j=await r.json().catch(()=>({}));if(r.ok){m.style.color='#5be3a0';m.textCo
         return await handleMcp(req, res);
       }
       if (u.pathname === '/api/pair' && req.method === 'POST') return await handlePair(req, res, u);
+      if (u.pathname === '/healthz' && req.method === 'GET') { const ps = global.cortexPersistence ? global.cortexPersistence.status() : null; return send(res, ps && ps.error ? 503 : 200, { ok: !(ps && ps.error), version: require('../package.json').version, hosted: HOSTED, save: ps }); }
       if (u.pathname === '/pair' && req.method === 'GET') return sendPairPage(res, u);
       if ((u.pathname === '/install' || u.pathname.startsWith('/install/') || u.pathname.startsWith('/i/')) && req.method === 'GET') return handleInstall(req, res, u);
       if (u.pathname.startsWith('/api/runner/')) {

@@ -1,12 +1,36 @@
 # Plan: Cortex on Azure App Service + Cosmos DB + Key Vault
 
-Status: plan only, nothing created yet. Decisions taken with the user:
+Status: **built** on branch `azure-app-service` (tests pass with a fake Cosmos DB; not yet deployed to a real subscription). Decisions taken with the user:
 - App Service **Basic B1** (Linux, Always On)
 - Sign-in: **Cortex pairing only** (no Entra ID login in front)
 - Data: **Cosmos DB for NoSQL** now (free tier), no file vault in Azure
 - Deploy: **Bicep + GitHub Actions**
 - Topology: **Azure is the main Cortex**; both computers keep a local Markdown copy that syncs with it and run agents
 - Subscription: **existing pay-as-you-go** · Region: **West US 2**
+
+## 0. How to set it up (once)
+1. Open Azure Cloud Shell (portal.azure.com → `>_` → Bash) and run:
+   ```bash
+   git clone -b azure-app-service https://github.com/w6d8g5tgvy-star/cortex && cd cortex && bash infra/setup-azure.sh
+   ```
+   It asks before creating anything, detects whether the Cosmos free tier is still available, deploys `infra/main.bicep`,
+   puts the two Cortex secrets in Key Vault, and creates the GitHub deploy identity (OIDC).
+2. Add the four repository **variables** it prints in GitHub (Settings → Secrets and variables → Actions → Variables).
+3. Run **Actions → Deploy to Azure → Run workflow**. Later releases deploy automatically.
+4. On your phone open `<app url>/pair` and enter the owner code it printed.
+5. On each computer: pair it as a computer (owner phone → Settings → Devices → Add a computer) and run
+   `node bin/cortex.js runner --sync` (or use the installer link). The home PC's first sync uploads your existing vault.
+
+## As built (differences from the first draft)
+- Cosmos stores the **vault files themselves** as documents (one container `vault`, partition key `/area`, files split
+  into 512 KB parts) instead of three containers with a new data model. Cortex keeps working on a local copy and every
+  module works unchanged; Cosmos is the record (restore on start, upload changes every 5 s and on shutdown). A full
+  per-item data model can come later without changing the infrastructure.
+- Code: `src/azure/cosmos.js` (REST client, managed-identity tokens, no npm packages), `src/azure/persist.js`,
+  `src/azure/hosted.js`, owner pairing in `src/devices.js`, `/healthz`, computer sync (`cortex runner --sync`).
+- Infra: `infra/main.bicep`, `infra/main.bicepparam`, `infra/setup-azure.sh`; deploy: `.github/workflows/deploy-azure.yml`.
+- Tests: `test/azure.js` (fake Cosmos DB + fake managed identity). The Bicep file wasn't compiled in the build
+  environment; Azure validates it on the first `az deployment group create`.
 
 ## 1. What gets created (one dedicated resource group)
 

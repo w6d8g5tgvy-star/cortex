@@ -126,6 +126,53 @@ async function standbyHandback(conf, log) {
   return r;
 }
 
+// ---------- sync: this computer keeps a full Markdown copy of a main Cortex that lives elsewhere (e.g. Azure) ----------
+// Two-way: local changes and deletions go up (the main keeps both versions if it changed too), then the main's changes
+// come down. Works offline (it just catches up). .cortex/ (settings, keys) stays per computer.
+const SYNCFILE = path.join(HOME, 'sync.json');
+function syncState() { try { return JSON.parse(fs.readFileSync(SYNCFILE, 'utf8')); } catch { return {}; } }
+function syncSave(x) { fs.mkdirSync(HOME, { recursive: true }); fs.writeFileSync(SYNCFILE, JSON.stringify(x)); }
+async function syncOnce(conf, vault, log = () => {}) {
+  const sb = require('./standby');
+  fs.mkdirSync(vault, { recursive: true });
+  const st = syncState(); const fresh = st.vault && st.vault !== vault; // switched folders: start over
+  const base = fresh ? {} : st.base || {}; const localBase = fresh ? {} : st.localBase || {};
+  const local = sb.index(vault);
+  const mine = (r) => sb.safe(r) && !r.startsWith('.cortex/');
+  const changed = Object.entries(local).filter(([r, m]) => { const b = localBase[r]; return mine(r) && (!b || b.size !== m.size || Math.abs(b.mtimeMs - m.mtimeMs) > 2); }).map(([r]) => r);
+  const deleted = Object.keys(localBase).filter((r) => !local[r] && mine(r));
+  const up = { written: [], conflicts: [], removed: [] };
+  for (let i = 0; i < Math.max(changed.length, deleted.length ? 1 : 0); i += 40) { // batches keep requests small
+    const files = changed.slice(i, i + 40).map((r) => ({ path: r, mtimeMs: local[r].mtimeMs, data: fs.readFileSync(path.join(vault, ...r.split('/'))).toString('base64') }));
+    const r = await call(conf, '/api/runner/vault-import', { mode: 'sync', files, baseline: base, deleted: i === 0 ? deleted : [] });
+    up.written.push(...(r.written || [])); up.conflicts.push(...(r.conflicts || [])); up.removed.push(...(r.removed || []));
+  }
+  // pull what changed on the main since our last look
+  let down = 0; let removed = 0; let resp = null; const known = { ...base };
+  for (let i = 0; i < 100; i++) {
+    resp = await call(conf, '/api/runner/vault-changes', { known, withIndex: true });
+    for (const f of resp.files || []) {
+      const r = sb.safe(f.path); if (!r || !mine(r)) continue;
+      const dest = path.join(vault, ...r.split('/')); const data = Buffer.from(f.data, 'base64');
+      let same = false; try { same = fs.readFileSync(dest).equals(data); } catch { /* new */ }
+      if (!same) { fs.mkdirSync(path.dirname(dest), { recursive: true }); fs.writeFileSync(dest + '.tmp', data); fs.renameSync(dest + '.tmp', dest); down++; }
+      known[r] = { size: data.length, mtimeMs: f.mtimeMs };
+    }
+    if (!resp.more) break;
+  }
+  const serverIdx = (resp && resp.index) || {};
+  // gone from the main: remove here only if it was synced before and hasn't changed here since
+  const now = sb.index(vault);
+  for (const r of Object.keys(now)) {
+    if (!mine(r) || serverIdx[r] || !localBase[r]) continue;
+    if (Math.abs(now[r].mtimeMs - localBase[r].mtimeMs) > 2 || now[r].size !== localBase[r].size) continue;
+    fs.rmSync(path.join(vault, ...r.split('/')), { force: true }); removed++;
+  }
+  syncSave({ vault, base: serverIdx, localBase: sb.index(vault), lastSync: Date.now() });
+  if (up.written.length + up.removed.length + down + removed || up.conflicts.length) log(`Synced with ${conf.hub}: ${up.written.length} up, ${down} down${up.removed.length + removed ? `, ${up.removed.length + removed} deleted` : ''}${up.conflicts.length ? `; kept both versions of ${up.conflicts.length} file(s)` : ''}.`);
+  return { up: up.written.length, down, deleted: up.removed.length + removed, conflicts: up.conflicts };
+}
+
 async function runOne(conf, job, runner, sessions, log) {
   let cwd = folderFor(conf, job);
   const ws = /^[\w-]{1,80}$/.test(job.project || '') ? job.project : 'unsorted';
@@ -181,7 +228,14 @@ async function start(opts, log = console.log) {
     if (st.active && st.takeoverAt) { SB.takeoverAt = st.takeoverAt; SB.baseline = st.baseline; } // resumed after a restart while serving
     log(`Standby mode on: keeping a copy of the main Cortex in ${SB.vault}; takes over after ${opts.takeoverMinutes || 5} minutes without the main computer.`);
   }
+  let lastSync = 0;
+  const syncVault = opts.sync ? path.resolve(opts.sync === true ? path.join(os.homedir(), 'Cortex') : opts.sync) : null;
+  if (syncVault) log(`Sync on: ${syncVault} stays a full copy of the main Cortex (every ${opts.syncSeconds || 60} s).`);
   for (;;) {
+    if (syncVault && Date.now() - lastSync > (opts.once ? 0 : (opts.syncSeconds || 60) * 1000)) {
+      lastSync = Date.now();
+      try { await syncOnce(conf, syncVault, log); } catch (e) { if (e.status === 401) throw new Error('This computer was removed from Cortex. Pair it again with a new code.'); log(`Sync: main Cortex not reachable (${e.message}). Will catch up later.`); }
+    }
     if (opts.standby) {
       try {
         await call(conf, '/api/runner/ping');
@@ -211,4 +265,4 @@ async function start(opts, log = console.log) {
   }
 }
 
-module.exports = { start, pair, folderFor, loadConf, replicate, HOME, SB, _reset: () => { smart = null; }, _stopStandby: () => { if (SB.child) { try { SB.child.kill(); } catch { /* gone */ } SB.child = null; } } };
+module.exports = { start, pair, folderFor, loadConf, replicate, syncOnce, HOME, SB, _reset: () => { smart = null; }, _stopStandby: () => { if (SB.child) { try { SB.child.kill(); } catch { /* gone */ } SB.child = null; } } };

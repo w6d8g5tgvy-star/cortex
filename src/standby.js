@@ -38,7 +38,7 @@ function index(vault) {
 }
 
 /** Main computer: files changed since `known` (the copy's index), plus the full list for deletions. Chunked. */
-function changes(vault, known = {}, { maxBytes = 8 * 1024 * 1024 } = {}) {
+function changes(vault, known = {}, { maxBytes = 8 * 1024 * 1024, withIndex = false } = {}) {
   const idx = index(vault); const files = []; let bytes = 0; let more = false;
   for (const [r, m] of Object.entries(idx)) {
     const k = known[r];
@@ -47,7 +47,7 @@ function changes(vault, known = {}, { maxBytes = 8 * 1024 * 1024 } = {}) {
     files.push({ path: r, mtimeMs: m.mtimeMs, data: fs.readFileSync(path.join(vault, r)).toString('base64') });
     bytes += m.size;
   }
-  return { files, all: Object.keys(idx), more, at: Date.now() };
+  return { files, all: Object.keys(idx), more, at: Date.now(), ...(withIndex && !more ? { index: idx } : {}) };
 }
 
 /** Copy: write what the main computer sent; remove files the main computer no longer has. */
@@ -81,6 +81,7 @@ function importChanges(vault, files, { baseline = {}, device = 'standby' } = {})
     const data = Buffer.from(f.data, 'base64');
     const cur = now[r]; const base = baseline[r];
     const mainChanged = cur && (!base || Math.abs(cur.mtimeMs - base.mtimeMs) > 2 || cur.size !== base.size);
+    if (mainChanged && sameContent(fs.readFileSync(dest), data)) { out.unchanged = (out.unchanged || 0) + 1; continue; } // same note (only timestamps differ)
     if (mainChanged && !fs.readFileSync(dest).equals(data)) {
       const ext = path.extname(r); const alt = r.slice(0, r.length - ext.length) + ` (from ${String(device).replace(/[^\w -]/g, '').slice(0, 30)})` + ext;
       const altDest = path.join(vault, ...alt.split('/'));
@@ -90,9 +91,23 @@ function importChanges(vault, files, { baseline = {}, device = 'standby' } = {})
   return out;
 }
 
+const sameContent = (a, b) => { const n = (t) => String(t).replace(/^(created|updated|completed):.*$/gm, '').replace(/\r\n/g, '\n').trim(); return a.equals(b) || n(a) === n(b); };
+
+/** Main: remove files the other computer deleted, unless they changed here since the last sync (then keep them). */
+function importDeletes(vault, paths, { baseline = {} } = {}) {
+  const now = index(vault); const removed = []; const kept = [];
+  for (const p of paths || []) {
+    const r = safe(p); if (!r || ALLOW_CORTEX.has(r) || !now[r]) continue;
+    const b = baseline[r]; const cur = now[r];
+    if (!b || Math.abs(cur.mtimeMs - b.mtimeMs) > 2 || cur.size !== b.size) { kept.push(r); continue; }
+    fs.rmSync(path.join(vault, ...r.split('/')), { force: true }); removed.push(r);
+  }
+  return { removed, kept };
+}
+
 /** Copy: files changed locally since the takeover (what to hand back). */
 function changedSince(vault, sinceMs) {
   return Object.entries(index(vault)).filter(([r, m]) => m.mtimeMs > sinceMs && !ALLOW_CORTEX.has(r)).map(([r, m]) => ({ path: r, mtimeMs: m.mtimeMs, data: fs.readFileSync(path.join(vault, ...r.split('/'))).toString('base64') }));
 }
 
-module.exports = { index, changes, applyChanges, importChanges, changedSince, safe };
+module.exports = { index, changes, applyChanges, importChanges, importDeletes, changedSince, safe, sameContent };
